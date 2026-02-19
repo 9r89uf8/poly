@@ -20,7 +20,26 @@ function corsHeaders(contentType = "application/octet-stream") {
     "Cache-Control": "private, max-age=30",
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods": "GET, OPTIONS",
+    "Access-Control-Allow-Headers": "Range",
+    "Accept-Ranges": "bytes",
   };
+}
+
+function parseRequestedFormats(rawFormat) {
+  const normalized = String(rawFormat ?? "auto").toLowerCase().trim();
+  if (normalized === "wav") {
+    return ["wav", "mp3"];
+  }
+  if (normalized === "mp3") {
+    return ["mp3", "wav"];
+  }
+  return ["mp3", "wav"];
+}
+
+function copyHeaderIfPresent(headers, name, value) {
+  if (value) {
+    headers.set(name, value);
+  }
 }
 
 export const recordingWebhook = httpAction(async (ctx, request) => {
@@ -70,7 +89,7 @@ export const recordingAudioProxy = httpAction(async (ctx, request) => {
   const url = new URL(request.url);
   const recordingSid = String(url.searchParams.get("recordingSid") ?? "").trim();
   const token = String(url.searchParams.get("token") ?? "").trim();
-  const format = String(url.searchParams.get("format") ?? "mp3").toLowerCase();
+  const requestedFormats = parseRequestedFormats(url.searchParams.get("format"));
 
   if (!recordingSid || !token) {
     return new Response("missing recordingSid/token", { status: 400 });
@@ -93,27 +112,46 @@ export const recordingAudioProxy = httpAction(async (ctx, request) => {
   const authToken = requireEnvVar("TWILIO_AUTH_TOKEN");
   const authHeader =
     `Basic ${Buffer.from(`${accountSid}:${authToken}`).toString("base64")}`;
-  const normalizedFormat = format === "wav" ? "wav" : "mp3";
 
-  const response = await fetch(`${call.recordingUrl}.${normalizedFormat}`, {
-    method: "GET",
-    headers: {
-      Authorization: authHeader,
-    },
-  });
+  let twilioResponse = null;
+  let resolvedFormat = null;
+  const rangeHeader = request.headers.get("range");
+  let lastFailure = "unknown";
 
-  if (!response.ok) {
-    return new Response(
-      `twilio recording fetch failed: HTTP ${response.status}`,
-      { status: 502 },
-    );
+  for (const format of requestedFormats) {
+    const response = await fetch(`${call.recordingUrl}.${format}`, {
+      method: "GET",
+      headers: {
+        Authorization: authHeader,
+        ...(rangeHeader ? { Range: rangeHeader } : {}),
+      },
+    });
+
+    if (response.ok || response.status === 206) {
+      twilioResponse = response;
+      resolvedFormat = format;
+      break;
+    }
+
+    lastFailure = `${format}:HTTP ${response.status}`;
   }
 
-  const payload = await response.arrayBuffer();
-  const contentType = normalizedFormat === "wav" ? "audio/wav" : "audio/mpeg";
+  if (!twilioResponse || !resolvedFormat) {
+    return new Response(`twilio recording fetch failed (${lastFailure})`, {
+      status: 502,
+    });
+  }
 
-  return new Response(payload, {
-    status: 200,
-    headers: corsHeaders(contentType),
+  const contentType =
+    twilioResponse.headers.get("content-type") ??
+    (resolvedFormat === "wav" ? "audio/wav" : "audio/mpeg");
+  const headers = new Headers(corsHeaders(contentType));
+  copyHeaderIfPresent(headers, "Content-Length", twilioResponse.headers.get("content-length"));
+  copyHeaderIfPresent(headers, "Content-Range", twilioResponse.headers.get("content-range"));
+  headers.set("X-Recording-Format", resolvedFormat);
+
+  return new Response(twilioResponse.body, {
+    status: twilioResponse.status === 206 ? 206 : 200,
+    headers,
   });
 });

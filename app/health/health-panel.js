@@ -29,15 +29,15 @@ function formatRemaining(seconds) {
 }
 
 function resolveConvexSiteUrl() {
-  if (process.env.NEXT_PUBLIC_CONVEX_SITE_URL) {
-    return process.env.NEXT_PUBLIC_CONVEX_SITE_URL;
-  }
-
   if (process.env.NEXT_PUBLIC_CONVEX_URL?.endsWith(".convex.cloud")) {
     return process.env.NEXT_PUBLIC_CONVEX_URL.replace(
       ".convex.cloud",
       ".convex.site",
     );
+  }
+
+  if (process.env.NEXT_PUBLIC_CONVEX_SITE_URL) {
+    return process.env.NEXT_PUBLIC_CONVEX_SITE_URL;
   }
 
   return null;
@@ -85,7 +85,7 @@ export default function HealthPanel() {
     const params = new URLSearchParams({
       recordingSid: latestCall.recordingSid,
       token: latestCall.playbackToken,
-      format: "mp3",
+      format: "auto",
     });
     return `${convexSiteUrl}/twilio/recording-audio?${params.toString()}`;
   }, [convexSiteUrl, latestCall?.recordingSid, latestCall?.playbackToken]);
@@ -233,6 +233,11 @@ export default function HealthPanel() {
                 <audio controls preload="none" src={latestCallAudioUrl}>
                   Your browser does not support the audio element.
                 </audio>
+                <p className="muted" style={{ marginTop: 6, marginBottom: 0 }}>
+                  <a href={latestCallAudioUrl} target="_blank" rel="noreferrer">
+                    Open recording in new tab
+                  </a>
+                </p>
               </div>
             )}
           </div>
