@@ -32,6 +32,103 @@ function toErrorMessage(error) {
   return "Unknown error";
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRetryableTranscriptionError(error) {
+  const status = Number(error?.status);
+  const code = String(error?.code ?? "").toLowerCase();
+  const name = String(error?.name ?? "").toLowerCase();
+  const message = String(error?.message ?? "").toLowerCase();
+
+  if (Number.isFinite(status) && status >= 500) {
+    return true;
+  }
+
+  return (
+    code.includes("timeout") ||
+    code.includes("econn") ||
+    name.includes("connection") ||
+    message.includes("connection error") ||
+    message.includes("network")
+  );
+}
+
+function formatErrorDetails(error) {
+  const name = String(error?.name ?? "UnknownError");
+  const status = error?.status ?? null;
+  const code = error?.code ?? null;
+  const message = toErrorMessage(error);
+  return `${name} status=${status ?? "n/a"} code=${code ?? "n/a"} message=${message}`;
+}
+
+function buildTranscriptionModelCandidates() {
+  const configured = String(process.env.OPENAI_TRANSCRIBE_MODEL ?? "").trim();
+  const models = [];
+
+  if (configured) {
+    models.push(configured);
+  }
+
+  if (!models.includes("gpt-4o-mini-transcribe")) {
+    models.push("gpt-4o-mini-transcribe");
+  }
+
+  if (!models.includes("whisper-1")) {
+    models.push("whisper-1");
+  }
+
+  return models;
+}
+
+async function transcribeRecordingWithFallback(openaiClient, audioPath) {
+  const models = buildTranscriptionModelCandidates();
+  const maxAttemptsPerModel = 3;
+  const prompt =
+    "Automated airport weather phone line. Focus on extracting the spoken temperature value.";
+
+  let lastError = null;
+  let attempts = 0;
+
+  for (const model of models) {
+    for (let attempt = 1; attempt <= maxAttemptsPerModel; attempt += 1) {
+      attempts += 1;
+      try {
+        const transcription = await openaiClient.audio.transcriptions.create({
+          file: fs.createReadStream(audioPath),
+          model,
+          language: "en",
+          temperature: 0,
+          prompt,
+        });
+
+        return {
+          transcription,
+          model,
+          attempt,
+          attempts,
+        };
+      } catch (error) {
+        lastError = error;
+        const retryable = isRetryableTranscriptionError(error);
+        const isLastAttempt = attempt >= maxAttemptsPerModel;
+
+        if (retryable && !isLastAttempt) {
+          await sleep(attempt * 800);
+          continue;
+        }
+
+        break;
+      }
+    }
+  }
+
+  throw new Error(
+    `Transcription failed after ${attempts} attempts. ${formatErrorDetails(lastError)}`,
+  );
+}
+
 function getChicagoHour(input = Date.now()) {
   const value = new Intl.DateTimeFormat("en-US", {
     timeZone: "America/Chicago",
@@ -268,6 +365,7 @@ export const processRecording = internalAction({
     const openaiClient = new OpenAI({ apiKey: openaiApiKey });
 
     let tempPath = null;
+    let failureStage = "recording_download";
 
     try {
       const recording = await downloadRecording(
@@ -279,16 +377,17 @@ export const processRecording = internalAction({
       tempPath = path.join("/tmp", `${args.recordingSid}${recording.extension}`);
       await fs.promises.writeFile(tempPath, recording.binary);
 
-      const transcription = await openaiClient.audio.transcriptions.create({
-        file: fs.createReadStream(tempPath),
-        model: "gpt-4o-mini-transcribe",
-        language: "en",
-        temperature: 0,
-        prompt:
-          "Automated airport weather phone line. Focus on extracting the spoken temperature value.",
-      });
+      failureStage = "transcription_request";
+
+      const transcriptionResult = await transcribeRecordingWithFallback(
+        openaiClient,
+        tempPath,
+      );
+      const transcription = transcriptionResult.transcription;
+      const transcriptionModel = transcriptionResult.model;
 
       const transcript = String(transcription.text ?? "").trim();
+      failureStage = "temperature_parse";
       const extracted = extractTemperatureFromTranscript(transcript);
 
       if (extracted.value === null || !Number.isFinite(extracted.value)) {
@@ -345,6 +444,7 @@ export const processRecording = internalAction({
         payload: {
           callSid: args.callSid ?? null,
           recordingSid: args.recordingSid,
+          transcriptionModel,
           tempC,
           tempF,
           assumedUnit: extracted.unit,
@@ -358,7 +458,7 @@ export const processRecording = internalAction({
         tempF,
       };
     } catch (error) {
-      const reason = toErrorMessage(error);
+      const reason = formatErrorDetails(error);
       await patchPhoneCallWithFallback(ctx, args, {
         status: "FAILED",
         parsedOk: false,
@@ -369,7 +469,7 @@ export const processRecording = internalAction({
         dayKey,
         type: "PHONE_CALL_FAILED",
         payload: {
-          stage: "recording_process",
+          stage: failureStage,
           reason,
           callSid: args.callSid ?? null,
           recordingSid: args.recordingSid,
