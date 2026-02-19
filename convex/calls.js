@@ -10,6 +10,7 @@ const phoneCallPatchValidator = v.object({
   recordingSid: v.optional(v.string()),
   recordingUrl: v.optional(v.string()),
   recordingDurationSec: v.optional(v.number()),
+  playbackToken: v.optional(v.string()),
   transcript: v.optional(v.string()),
   tempC: v.optional(v.number()),
   tempF: v.optional(v.number()),
@@ -83,6 +84,7 @@ export const createPhoneCall = internalMutation({
     sourceNumber: v.optional(v.string()),
     targetNumber: v.string(),
     warning: v.optional(v.string()),
+    playbackToken: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const now = Date.now();
@@ -95,6 +97,7 @@ export const createPhoneCall = internalMutation({
       sourceNumber: args.sourceNumber,
       targetNumber: args.targetNumber,
       warning: args.warning,
+      playbackToken: args.playbackToken,
       parsedOk: false,
       createdAt: now,
       updatedAt: now,

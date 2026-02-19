@@ -7,10 +7,11 @@ import twilio from "twilio";
 import OpenAI from "openai";
 import fs from "node:fs";
 import path from "node:path";
+import { randomBytes } from "node:crypto";
 import { formatUtcToChicago, getChicagoDayKey } from "./lib/time";
 
 const DEFAULT_TARGET_NUMBER = "+17738000035";
-const CALL_COOLDOWN_MS = 15 * 60 * 1000;
+const CALL_COOLDOWN_MS = 60 * 1000;
 const DAYTIME_WARNING =
   "Manual call requested during 07:00-13:00 America/Chicago (sun-heating window).";
 
@@ -267,6 +268,7 @@ export const requestManualAirportCall = action({
     const convexSiteUrl = requireEnvVar("CONVEX_SITE_URL");
     const targetNumber = process.env.TWILIO_TO_OHARE_NUMBER ?? DEFAULT_TARGET_NUMBER;
     const warning = isDiscouragedCallWindow(now) ? DAYTIME_WARNING : undefined;
+    const playbackToken = randomBytes(24).toString("hex");
 
     const inserted = await ctx.runMutation(internal.calls.createPhoneCall, {
       dayKey,
@@ -276,10 +278,11 @@ export const requestManualAirportCall = action({
       sourceNumber: fromNumber,
       targetNumber,
       warning,
+      playbackToken,
     });
 
     const client = twilio(accountSid, authToken);
-    const twiml = "<Response><Pause length=\"15\"/><Hangup/></Response>";
+    const twiml = "<Response><Pause length=\"20\"/><Hangup/></Response>";
     const recordingStatusCallback =
       `${convexSiteUrl}/twilio/recording?secret=${encodeURIComponent(webhookSecret)}`;
 

@@ -94,6 +94,7 @@ export default defineSchema({
     recordingSid: v.optional(v.string()),
     recordingUrl: v.optional(v.string()),
     recordingDurationSec: v.optional(v.number()),
+    playbackToken: v.optional(v.string()),
     transcript: v.optional(v.string()),
     tempC: v.optional(v.number()),
     tempF: v.optional(v.number()),

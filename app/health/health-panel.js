@@ -5,7 +5,7 @@ import { useAction, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { getChicagoDayKey } from "@/lib/time";
 
-const CALL_COOLDOWN_SECONDS = 15 * 60;
+const CALL_COOLDOWN_SECONDS = 60;
 
 function getChicagoHour(input = Date.now()) {
   const value = new Intl.DateTimeFormat("en-US", {
@@ -26,6 +26,21 @@ function formatRemaining(seconds) {
   const mins = Math.floor(safe / 60);
   const secs = safe % 60;
   return `${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
+}
+
+function resolveConvexSiteUrl() {
+  if (process.env.NEXT_PUBLIC_CONVEX_SITE_URL) {
+    return process.env.NEXT_PUBLIC_CONVEX_SITE_URL;
+  }
+
+  if (process.env.NEXT_PUBLIC_CONVEX_URL?.endsWith(".convex.cloud")) {
+    return process.env.NEXT_PUBLIC_CONVEX_URL.replace(
+      ".convex.cloud",
+      ".convex.site",
+    );
+  }
+
+  return null;
 }
 
 export default function HealthPanel() {
@@ -60,6 +75,20 @@ export default function HealthPanel() {
     const nextAllowedAt = latestCall.requestedAt + (CALL_COOLDOWN_SECONDS * 1000);
     return Math.max(0, Math.ceil((nextAllowedAt - nowMs) / 1000));
   }, [latestCall?.requestedAt, nowMs]);
+
+  const convexSiteUrl = useMemo(() => resolveConvexSiteUrl(), []);
+  const latestCallAudioUrl = useMemo(() => {
+    if (!convexSiteUrl || !latestCall?.recordingSid || !latestCall?.playbackToken) {
+      return null;
+    }
+
+    const params = new URLSearchParams({
+      recordingSid: latestCall.recordingSid,
+      token: latestCall.playbackToken,
+      format: "mp3",
+    });
+    return `${convexSiteUrl}/twilio/recording-audio?${params.toString()}`;
+  }, [convexSiteUrl, latestCall?.recordingSid, latestCall?.playbackToken]);
 
   const canRequestCall =
     requestStatus !== "calling" &&
@@ -195,6 +224,16 @@ export default function HealthPanel() {
                 <summary>Transcript</summary>
                 <code>{latestCall.transcript}</code>
               </details>
+            )}
+            {latestCallAudioUrl && (
+              <div>
+                <p className="muted" style={{ marginTop: 0, marginBottom: 6 }}>
+                  Recording
+                </p>
+                <audio controls preload="none" src={latestCallAudioUrl}>
+                  Your browser does not support the audio element.
+                </audio>
+              </div>
             )}
           </div>
         )}
