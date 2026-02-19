@@ -42,6 +42,16 @@ function copyHeaderIfPresent(headers, name, value) {
   }
 }
 
+function toBasicAuthHeader(accountSid, authToken) {
+  const credentials = `${accountSid}:${authToken}`;
+
+  if (typeof btoa === "function") {
+    return `Basic ${btoa(credentials)}`;
+  }
+
+  throw new Error("Base64 encoder is unavailable in this runtime.");
+}
+
 export const recordingWebhook = httpAction(async (ctx, request) => {
   const url = new URL(request.url);
   const providedSecret = url.searchParams.get("secret");
@@ -109,8 +119,7 @@ export const recordingAudioProxy = httpAction(async (ctx, request) => {
 
   const accountSid = requireEnvVar("TWILIO_ACCOUNT_SID");
   const authToken = requireEnvVar("TWILIO_AUTH_TOKEN");
-  const authHeader =
-    `Basic ${Buffer.from(`${accountSid}:${authToken}`).toString("base64")}`;
+  const authHeader = toBasicAuthHeader(accountSid, authToken);
 
   let twilioResponse = null;
   let resolvedFormat = null;
