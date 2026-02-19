@@ -1,5 +1,5 @@
 import { httpAction } from "./_generated/server";
-import { internal } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 
 function parseOptionalNumber(value) {
   const numberValue = Number(value);
@@ -95,10 +95,9 @@ export const recordingAudioProxy = httpAction(async (ctx, request) => {
     return new Response("missing recordingSid/token", { status: 400 });
   }
 
-  const call = await ctx.db
-    .query("phoneCalls")
-    .withIndex("by_recordingSid", (q) => q.eq("recordingSid", recordingSid))
-    .first();
+  const call = await ctx.runQuery(api.calls.getPhoneCallByRecordingSid, {
+    recordingSid,
+  });
 
   if (!call || !call.recordingUrl) {
     return new Response("recording not found", { status: 404 });

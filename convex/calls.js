@@ -75,6 +75,18 @@ export const getRecentPhoneCalls = query({
   },
 });
 
+export const getPhoneCallByRecordingSid = query({
+  args: {
+    recordingSid: v.string(),
+  },
+  handler: async (ctx, args) => {
+    return await ctx.db
+      .query("phoneCalls")
+      .withIndex("by_recordingSid", (q) => q.eq("recordingSid", args.recordingSid))
+      .first();
+  },
+});
+
 export const createPhoneCall = internalMutation({
   args: {
     dayKey: v.string(),
