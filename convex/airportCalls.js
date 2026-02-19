@@ -60,7 +60,16 @@ function formatErrorDetails(error) {
   const status = error?.status ?? null;
   const code = error?.code ?? null;
   const message = toErrorMessage(error);
-  return `${name} status=${status ?? "n/a"} code=${code ?? "n/a"} message=${message}`;
+  const causeName = String(error?.cause?.name ?? "");
+  const causeCode = String(error?.cause?.code ?? "");
+  const causeMessage = String(error?.cause?.message ?? "");
+  const causeSummary = [causeName, causeCode, causeMessage]
+    .filter((part) => part && part !== "undefined")
+    .join(" ");
+
+  return `${name} status=${status ?? "n/a"} code=${code ?? "n/a"} message=${message}${
+    causeSummary ? ` cause=${causeSummary}` : ""
+  }`;
 }
 
 function buildTranscriptionModelCandidates() {
@@ -362,7 +371,12 @@ export const processRecording = internalAction({
     const accountSid = requireEnvVar("TWILIO_ACCOUNT_SID");
     const authToken = requireEnvVar("TWILIO_AUTH_TOKEN");
     const openaiApiKey = requireEnvVar("OPENAI_API_KEY");
-    const openaiClient = new OpenAI({ apiKey: openaiApiKey });
+    const openaiClient = new OpenAI({
+      apiKey: openaiApiKey,
+      baseURL: "https://api.openai.com/v1",
+      timeout: 60_000,
+      maxRetries: 0,
+    });
 
     let tempPath = null;
     let failureStage = "recording_download";
