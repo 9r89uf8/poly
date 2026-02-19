@@ -22,26 +22,26 @@ export default function RootLayout({ children }) {
   return (
     <html lang="en">
       <body className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
-        <ConvexClientProvider>
-          <div className="site-shell">
-            <header className="site-header">
-              <div>
-                <p className="site-eyebrow">Oracle Terminal</p>
-                <h1 className="site-title">KORD Temperature Markets</h1>
-              </div>
-              <nav className="site-nav" aria-label="Primary">
-                <Link href="/">Dashboard</Link>
-                <Link href="/market">Market</Link>
-                <Link href="/observations">Observations</Link>
-                <Link href="/alerts">Alerts</Link>
-                <Link href="/settings">Settings</Link>
-                <Link href="/health">Health</Link>
-                <Link href="/calibration">Calibration</Link>
-              </nav>
-            </header>
-            <main className="site-main">{children}</main>
-          </div>
-        </ConvexClientProvider>
+        <div className="site-shell">
+          <header className="site-header">
+            <div>
+              <p className="site-eyebrow">Oracle Terminal</p>
+              <h1 className="site-title">KORD Temperature Markets</h1>
+            </div>
+            <nav className="site-nav" aria-label="Primary">
+              <Link href="/">Dashboard</Link>
+              <Link href="/market">Market</Link>
+              <Link href="/observations">Observations</Link>
+              <Link href="/alerts">Alerts</Link>
+              <Link href="/settings">Settings</Link>
+              <Link href="/health">Health</Link>
+              <Link href="/calibration">Calibration</Link>
+            </nav>
+          </header>
+          <main className="site-main">
+            <ConvexClientProvider>{children}</ConvexClientProvider>
+          </main>
+        </div>
       </body>
     </html>
   );

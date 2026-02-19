@@ -80,6 +80,34 @@ export default defineSchema({
     .index("by_dayKey", ["dayKey"])
     .index("by_dayKey_obsKey", ["dayKey", "obsKey"]),
 
+  phoneCalls: defineTable({
+    dayKey: v.string(),
+    status: v.string(),
+    requestedBy: v.optional(v.string()),
+    requestedAt: v.number(),
+    requestedAtLocal: v.string(),
+    sourceNumber: v.optional(v.string()),
+    targetNumber: v.string(),
+    callSid: v.optional(v.string()),
+    callStartedAt: v.optional(v.number()),
+    callCompletedAt: v.optional(v.number()),
+    recordingSid: v.optional(v.string()),
+    recordingUrl: v.optional(v.string()),
+    recordingDurationSec: v.optional(v.number()),
+    transcript: v.optional(v.string()),
+    tempC: v.optional(v.number()),
+    tempF: v.optional(v.number()),
+    parsedOk: v.optional(v.boolean()),
+    error: v.optional(v.string()),
+    warning: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_dayKey", ["dayKey"])
+    .index("by_requestedAt", ["requestedAt"])
+    .index("by_callSid", ["callSid"])
+    .index("by_recordingSid", ["recordingSid"]),
+
   dailyStats: defineTable({
     dayKey: v.string(),
     currentTempWholeF: v.optional(v.number()),
