@@ -24,6 +24,18 @@ const settingsPatchValidator = {
   weatherBackupUrl: v.optional(v.string()),
   tempExtraction: v.optional(extractionValidator),
   rounding: v.optional(roundingValidator),
+  autoCallEnabled: v.optional(v.boolean()),
+  autoCallShadowMode: v.optional(v.boolean()),
+  autoCallMaxPerDay: v.optional(v.number()),
+  autoCallMinSpacingMinutes: v.optional(v.number()),
+  autoCallEvalEveryMinutes: v.optional(v.number()),
+  autoCallPrePeakLeadMinutes: v.optional(v.number()),
+  autoCallPrePeakLagMinutes: v.optional(v.number()),
+  autoCallPeakLeadMinutes: v.optional(v.number()),
+  autoCallPeakLagMinutes: v.optional(v.number()),
+  autoCallPostPeakLeadMinutes: v.optional(v.number()),
+  autoCallPostPeakLagMinutes: v.optional(v.number()),
+  autoCallNearMaxThresholdF: v.optional(v.number()),
 };
 
 function keepDefined(value) {
@@ -42,6 +54,18 @@ function mergeSettings(existing, patch = {}) {
     weatherBackupUrl: existing?.weatherBackupUrl,
     tempExtraction: existing?.tempExtraction,
     rounding: existing?.rounding,
+    autoCallEnabled: existing?.autoCallEnabled,
+    autoCallShadowMode: existing?.autoCallShadowMode,
+    autoCallMaxPerDay: existing?.autoCallMaxPerDay,
+    autoCallMinSpacingMinutes: existing?.autoCallMinSpacingMinutes,
+    autoCallEvalEveryMinutes: existing?.autoCallEvalEveryMinutes,
+    autoCallPrePeakLeadMinutes: existing?.autoCallPrePeakLeadMinutes,
+    autoCallPrePeakLagMinutes: existing?.autoCallPrePeakLagMinutes,
+    autoCallPeakLeadMinutes: existing?.autoCallPeakLeadMinutes,
+    autoCallPeakLagMinutes: existing?.autoCallPeakLagMinutes,
+    autoCallPostPeakLeadMinutes: existing?.autoCallPostPeakLeadMinutes,
+    autoCallPostPeakLagMinutes: existing?.autoCallPostPeakLagMinutes,
+    autoCallNearMaxThresholdF: existing?.autoCallNearMaxThresholdF,
     dayResetRule: existing?.dayResetRule,
   });
 

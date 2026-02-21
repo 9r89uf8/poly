@@ -28,6 +28,7 @@ export default function MarketClient() {
   const dayKey = useMemo(() => getChicagoDayKey(), []);
 
   const importEventBySlugOrUrl = useAction(api.polymarket.importEventBySlugOrUrl);
+  const refreshBinPriceSnapshotsNow = useAction(api.polymarket.refreshBinPriceSnapshotsNow);
   const upsertEvent = useMutation(api.polymarket.upsertEvent);
   const replaceBinsForDay = useMutation(api.polymarket.replaceBinsForDay);
   const setActiveMarketForDay = useMutation(api.polymarket.setActiveMarketForDay);
@@ -100,6 +101,12 @@ export default function MarketClient() {
         eventId: preview.event.eventId,
         slug: preview.event.slug,
       });
+
+      try {
+        await refreshBinPriceSnapshotsNow({ dayKey });
+      } catch {
+        // Price snapshots are best-effort; market activation should still succeed.
+      }
 
       setStatus("saved");
       setTimeout(() => setStatus("idle"), 1500);

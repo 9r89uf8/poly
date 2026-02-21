@@ -9,4 +9,22 @@ crons.interval(
   internal.weather.pollWeatherAndUpdateState,
 );
 
+crons.interval(
+  "refresh_forecast_kord",
+  { minutes: 60 },
+  internal.forecast.refreshForecastSnapshot,
+);
+
+crons.interval(
+  "evaluate_auto_call_need",
+  { minutes: 5 },
+  internal.autoCall.evaluateAndMaybeCall,
+);
+
+crons.interval(
+  "refresh_polymarket_bin_prices",
+  { minutes: 5 },
+  internal.polymarket.refreshBinPriceSnapshots,
+);
+
 export default crons;

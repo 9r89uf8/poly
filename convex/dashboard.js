@@ -93,6 +93,22 @@ export const getHealth = query({
       .order("desc")
       .take(20);
 
+    const settings = await ctx.db
+      .query("settings")
+      .withIndex("by_key", (q) => q.eq("key", DEFAULT_SETTINGS.key))
+      .unique();
+
+    const autoCallState = await ctx.db
+      .query("autoCallState")
+      .withIndex("by_dayKey", (q) => q.eq("dayKey", dayKey))
+      .unique();
+
+    const latestForecast = await ctx.db
+      .query("forecastSnapshots")
+      .withIndex("by_dayKey_fetchedAt", (q) => q.eq("dayKey", dayKey))
+      .order("desc")
+      .first();
+
     return {
       dayKey,
       lastCronRunLocal: stats?.updatedAt
@@ -105,6 +121,21 @@ export const getHealth = query({
       recentErrorsCount: recentErrors.filter((x) =>
         ["DATA_STALE", "SOURCE_FAILOVER"].includes(x.type),
       ).length,
+      autoCallEnabled: Boolean(
+        settings?.autoCallEnabled ?? DEFAULT_SETTINGS.autoCallEnabled,
+      ),
+      autoCallShadowMode: Boolean(
+        settings?.autoCallShadowMode ?? DEFAULT_SETTINGS.autoCallShadowMode,
+      ),
+      autoCallsToday: Number(autoCallState?.autoCallsMade ?? 0),
+      lastAutoDecisionReason: autoCallState?.lastReasonCode ?? null,
+      lastAutoDecisionLocal: autoCallState?.lastDecisionAt
+        ? formatUtcToChicago(autoCallState.lastDecisionAt, true)
+        : null,
+      predictedMaxTimeLocal: latestForecast?.predictedMaxTimeLocal ?? null,
+      forecastFetchedAtLocal: latestForecast?.fetchedAt
+        ? formatUtcToChicago(latestForecast.fetchedAt, true)
+        : null,
     };
   },
 });

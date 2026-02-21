@@ -1,5 +1,16 @@
-import { action, mutation, query } from "./_generated/server";
+import {
+  action,
+  internalAction,
+  internalMutation,
+  mutation,
+  query,
+} from "./_generated/server";
+import { api, internal as internalApi } from "./_generated/api";
 import { v } from "convex/values";
+import { formatUtcToChicago, getChicagoDayKey } from "./lib/time";
+
+const GAMMA_BASE_URL = "https://gamma-api.polymarket.com";
+const MAX_PRICE_SNAPSHOT_WRITES = 300;
 
 function extractSlug(input) {
   const trimmed = input.trim();
@@ -66,6 +77,60 @@ function parseTokenIds(clobTokenIds, outcomes) {
         ? tokenIds[noIndex]
         : tokenIds[1] ?? null,
   };
+}
+
+function toFinitePriceOrNull(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return null;
+  }
+
+  if (parsed < 0) {
+    return 0;
+  }
+
+  if (parsed > 1) {
+    return 1;
+  }
+
+  return parsed;
+}
+
+function parseYesNoPrices(market) {
+  const outcomes = parseArrayField(market?.outcomes).map((value) =>
+    String(value).trim().toLowerCase(),
+  );
+  const prices = parseArrayField(market?.outcomePrices).map(toFinitePriceOrNull);
+
+  if (prices.length === 0) {
+    return { yesPrice: null, noPrice: null };
+  }
+
+  const yesIndex = outcomes.findIndex((value) => value === "yes");
+  const noIndex = outcomes.findIndex((value) => value === "no");
+
+  return {
+    yesPrice:
+      yesIndex >= 0 && prices[yesIndex] !== undefined
+        ? prices[yesIndex]
+        : (prices[0] ?? null),
+    noPrice:
+      noIndex >= 0 && prices[noIndex] !== undefined
+        ? prices[noIndex]
+        : (prices[1] ?? null),
+  };
+}
+
+async function fetchGammaEventBySlug(slug) {
+  const response = await fetch(`${GAMMA_BASE_URL}/events/slug/${slug}`, {
+    method: "GET",
+  });
+
+  if (!response.ok) {
+    throw new Error(`Gamma returned ${response.status} for slug '${slug}'.`);
+  }
+
+  return await response.json();
 }
 
 function parseBoundsFromQuestion(question) {
@@ -173,18 +238,7 @@ export const importEventBySlugOrUrl = action({
   },
   handler: async (_ctx, args) => {
     const slug = extractSlug(args.input);
-    const response = await fetch(
-      `https://gamma-api.polymarket.com/events/slug/${slug}`,
-      {
-        method: "GET",
-      },
-    );
-
-    if (!response.ok) {
-      throw new Error(`Gamma returned ${response.status} for slug '${slug}'.`);
-    }
-
-    const payload = await response.json();
+    const payload = await fetchGammaEventBySlug(slug);
 
     const event = {
       eventId: String(payload.id ?? payload.eventId),
@@ -361,5 +415,211 @@ export const getBins = query({
       .collect();
 
     return bins.sort((a, b) => a.orderIndex - b.orderIndex);
+  },
+});
+
+export const insertBinPriceSnapshots = internalMutation({
+  args: {
+    dayKey: v.string(),
+    eventId: v.string(),
+    source: v.string(),
+    fetchedAt: v.number(),
+    fetchedAtLocal: v.optional(v.string()),
+    snapshots: v.array(
+      v.object({
+        marketId: v.string(),
+        yesPrice: v.optional(v.union(v.number(), v.null())),
+        noPrice: v.optional(v.union(v.number(), v.null())),
+      }),
+    ),
+  },
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    const uniqueByMarketId = new Map();
+    for (const snapshot of args.snapshots) {
+      uniqueByMarketId.set(snapshot.marketId, snapshot);
+      if (uniqueByMarketId.size >= MAX_PRICE_SNAPSHOT_WRITES) {
+        break;
+      }
+    }
+
+    let inserted = 0;
+    for (const snapshot of uniqueByMarketId.values()) {
+      await ctx.db.insert("binPriceSnapshots", {
+        dayKey: args.dayKey,
+        eventId: args.eventId,
+        marketId: snapshot.marketId,
+        source: args.source,
+        yesPrice: snapshot.yesPrice ?? undefined,
+        noPrice: snapshot.noPrice ?? undefined,
+        fetchedAt: args.fetchedAt,
+        fetchedAtLocal: args.fetchedAtLocal ?? undefined,
+        createdAt: now,
+      });
+      inserted += 1;
+    }
+
+    return {
+      inserted,
+      fetchedAt: args.fetchedAt,
+      fetchedAtLocal: args.fetchedAtLocal ?? null,
+    };
+  },
+});
+
+export const refreshBinPriceSnapshots = internalAction({
+  args: {
+    dayKey: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    const dayKey = args.dayKey ?? getChicagoDayKey(now);
+    const activeMarket = await ctx.runQuery(api.polymarket.getActiveMarket, {
+      dayKey,
+    });
+    const bins = await ctx.runQuery(api.polymarket.getBins, { dayKey });
+
+    if (!activeMarket?.day?.activeEventId || !activeMarket?.day?.activeEventSlug) {
+      return {
+        ok: true,
+        dayKey,
+        skipped: "NO_ACTIVE_MARKET",
+      };
+    }
+
+    if (!Array.isArray(bins) || bins.length === 0) {
+      return {
+        ok: true,
+        dayKey,
+        skipped: "NO_BINS",
+      };
+    }
+
+    let payload;
+    try {
+      payload = await fetchGammaEventBySlug(activeMarket.day.activeEventSlug);
+    } catch (error) {
+      await ctx.runMutation(api.weather.insertAlert, {
+        dayKey,
+        type: "POLYMARKET_PRICE_REFRESH_FAILED",
+        payload: {
+          message: error?.message ?? "Unknown error",
+          slugTried: activeMarket.day.activeEventSlug,
+        },
+      });
+      throw error;
+    }
+
+    const markets = Array.isArray(payload?.markets) ? payload.markets : [];
+    const marketById = new Map(
+      markets.map((market) => [String(market.id ?? market.marketId ?? ""), market]),
+    );
+
+    const snapshots = bins.map((bin) => {
+      const market = marketById.get(String(bin.marketId));
+      const prices = market ? parseYesNoPrices(market) : { yesPrice: null, noPrice: null };
+      return {
+        marketId: String(bin.marketId),
+        yesPrice: prices.yesPrice,
+        noPrice: prices.noPrice,
+      };
+    });
+
+    const insertResult = await ctx.runMutation(
+      internalApi.polymarket.insertBinPriceSnapshots,
+      {
+        dayKey,
+        eventId: String(activeMarket.day.activeEventId),
+        source: "GAMMA_EVENT",
+        fetchedAt: now,
+        fetchedAtLocal: formatUtcToChicago(now, true),
+        snapshots,
+      },
+    );
+
+    return {
+      ok: true,
+      dayKey,
+      eventId: activeMarket.day.activeEventId,
+      slug: activeMarket.day.activeEventSlug,
+      binsTracked: bins.length,
+      snapshotsInserted: insertResult.inserted,
+      fetchedAt: insertResult.fetchedAt,
+      fetchedAtLocal: insertResult.fetchedAtLocal,
+    };
+  },
+});
+
+export const refreshBinPriceSnapshotsNow = action({
+  args: {
+    dayKey: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    return await ctx.runAction(internalApi.polymarket.refreshBinPriceSnapshots, {
+      dayKey: args.dayKey,
+    });
+  },
+});
+
+export const getLatestBinPriceSnapshots = query({
+  args: {
+    dayKey: v.optional(v.string()),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    const dayKey = args.dayKey ?? getChicagoDayKey(now);
+    const limit = Math.min(Math.max(Math.round(Number(args.limit ?? 800)), 50), 2400);
+
+    const bins = await ctx.db
+      .query("polymarketBins")
+      .withIndex("by_dayKey_orderIndex", (q) => q.eq("dayKey", dayKey))
+      .collect();
+
+    const snapshots = await ctx.db
+      .query("binPriceSnapshots")
+      .withIndex("by_dayKey_fetchedAt", (q) => q.eq("dayKey", dayKey))
+      .order("desc")
+      .take(limit);
+
+    const latestByMarketId = new Map();
+    for (const snapshot of snapshots) {
+      if (!latestByMarketId.has(snapshot.marketId)) {
+        latestByMarketId.set(snapshot.marketId, snapshot);
+      }
+      if (latestByMarketId.size >= bins.length) {
+        break;
+      }
+    }
+
+    const latestFetchedAt = snapshots[0]?.fetchedAt ?? null;
+    const latestFetchedAtLocal = snapshots[0]?.fetchedAtLocal ??
+      (Number.isFinite(Number(latestFetchedAt))
+        ? formatUtcToChicago(Number(latestFetchedAt), true)
+        : null);
+
+    const prices = bins.map((bin) => {
+      const snapshot = latestByMarketId.get(bin.marketId);
+      return {
+        marketId: bin.marketId,
+        yesPrice: snapshot?.yesPrice ?? null,
+        noPrice: snapshot?.noPrice ?? null,
+        fetchedAt: snapshot?.fetchedAt ?? null,
+        fetchedAtLocal: snapshot?.fetchedAtLocal ??
+          (Number.isFinite(Number(snapshot?.fetchedAt))
+            ? formatUtcToChicago(Number(snapshot.fetchedAt), true)
+            : null),
+      };
+    });
+
+    return {
+      dayKey,
+      latestFetchedAt,
+      latestFetchedAtLocal,
+      ageSeconds: Number.isFinite(Number(latestFetchedAt))
+        ? Math.max(0, Math.floor((now - Number(latestFetchedAt)) / 1000))
+        : null,
+      prices,
+    };
   },
 });

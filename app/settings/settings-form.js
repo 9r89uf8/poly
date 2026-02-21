@@ -38,6 +38,18 @@ export default function SettingsForm() {
       weatherBackupUrl: settings.weatherBackupUrl,
       tempExtraction: settings.tempExtraction,
       rounding: settings.rounding,
+      autoCallEnabled: Boolean(settings.autoCallEnabled),
+      autoCallShadowMode: Boolean(settings.autoCallShadowMode),
+      autoCallMaxPerDay: String(settings.autoCallMaxPerDay),
+      autoCallMinSpacingMinutes: String(settings.autoCallMinSpacingMinutes),
+      autoCallEvalEveryMinutes: String(settings.autoCallEvalEveryMinutes),
+      autoCallPrePeakLeadMinutes: String(settings.autoCallPrePeakLeadMinutes),
+      autoCallPrePeakLagMinutes: String(settings.autoCallPrePeakLagMinutes),
+      autoCallPeakLeadMinutes: String(settings.autoCallPeakLeadMinutes),
+      autoCallPeakLagMinutes: String(settings.autoCallPeakLagMinutes),
+      autoCallPostPeakLeadMinutes: String(settings.autoCallPostPeakLeadMinutes),
+      autoCallPostPeakLagMinutes: String(settings.autoCallPostPeakLagMinutes),
+      autoCallNearMaxThresholdF: String(settings.autoCallNearMaxThresholdF),
     });
   }, [settings]);
 
@@ -47,6 +59,11 @@ export default function SettingsForm() {
 
   const onChange = (field) => (event) => {
     const value = event.target.value;
+    setForm((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const onToggle = (field) => (event) => {
+    const value = Boolean(event.target.checked);
     setForm((prev) => ({ ...prev, [field]: value }));
   };
 
@@ -71,6 +88,48 @@ export default function SettingsForm() {
         weatherBackupUrl: form.weatherBackupUrl,
         tempExtraction: form.tempExtraction,
         rounding: form.rounding,
+        autoCallEnabled: Boolean(form.autoCallEnabled),
+        autoCallShadowMode: Boolean(form.autoCallShadowMode),
+        autoCallMaxPerDay: toNumber(
+          form.autoCallMaxPerDay,
+          defaults.autoCallMaxPerDay,
+        ),
+        autoCallMinSpacingMinutes: toNumber(
+          form.autoCallMinSpacingMinutes,
+          defaults.autoCallMinSpacingMinutes,
+        ),
+        autoCallEvalEveryMinutes: toNumber(
+          form.autoCallEvalEveryMinutes,
+          defaults.autoCallEvalEveryMinutes,
+        ),
+        autoCallPrePeakLeadMinutes: toNumber(
+          form.autoCallPrePeakLeadMinutes,
+          defaults.autoCallPrePeakLeadMinutes,
+        ),
+        autoCallPrePeakLagMinutes: toNumber(
+          form.autoCallPrePeakLagMinutes,
+          defaults.autoCallPrePeakLagMinutes,
+        ),
+        autoCallPeakLeadMinutes: toNumber(
+          form.autoCallPeakLeadMinutes,
+          defaults.autoCallPeakLeadMinutes,
+        ),
+        autoCallPeakLagMinutes: toNumber(
+          form.autoCallPeakLagMinutes,
+          defaults.autoCallPeakLagMinutes,
+        ),
+        autoCallPostPeakLeadMinutes: toNumber(
+          form.autoCallPostPeakLeadMinutes,
+          defaults.autoCallPostPeakLeadMinutes,
+        ),
+        autoCallPostPeakLagMinutes: toNumber(
+          form.autoCallPostPeakLagMinutes,
+          defaults.autoCallPostPeakLagMinutes,
+        ),
+        autoCallNearMaxThresholdF: toNumber(
+          form.autoCallNearMaxThresholdF,
+          defaults.autoCallNearMaxThresholdF,
+        ),
       });
       setStatus("saved");
       setTimeout(() => setStatus("idle"), 1500);
@@ -176,6 +235,138 @@ export default function SettingsForm() {
             </option>
           ))}
         </select>
+      </div>
+
+      <div className="form-row">
+        <label htmlFor="autoCallEnabled">Forecast auto-call enabled</label>
+        <input
+          id="autoCallEnabled"
+          name="autoCallEnabled"
+          type="checkbox"
+          checked={form.autoCallEnabled}
+          onChange={onToggle("autoCallEnabled")}
+        />
+      </div>
+
+      <div className="form-row">
+        <label htmlFor="autoCallShadowMode">Shadow mode (no outbound calls)</label>
+        <input
+          id="autoCallShadowMode"
+          name="autoCallShadowMode"
+          type="checkbox"
+          checked={form.autoCallShadowMode}
+          onChange={onToggle("autoCallShadowMode")}
+        />
+      </div>
+
+      <div className="form-row">
+        <label htmlFor="autoCallMaxPerDay">Auto-call max per day</label>
+        <input
+          id="autoCallMaxPerDay"
+          name="autoCallMaxPerDay"
+          inputMode="numeric"
+          value={form.autoCallMaxPerDay}
+          onChange={onChange("autoCallMaxPerDay")}
+        />
+      </div>
+
+      <div className="form-row">
+        <label htmlFor="autoCallMinSpacingMinutes">Min spacing (minutes)</label>
+        <input
+          id="autoCallMinSpacingMinutes"
+          name="autoCallMinSpacingMinutes"
+          inputMode="numeric"
+          value={form.autoCallMinSpacingMinutes}
+          onChange={onChange("autoCallMinSpacingMinutes")}
+        />
+      </div>
+
+      <div className="form-row">
+        <label htmlFor="autoCallEvalEveryMinutes">Evaluation cadence (minutes)</label>
+        <input
+          id="autoCallEvalEveryMinutes"
+          name="autoCallEvalEveryMinutes"
+          inputMode="numeric"
+          value={form.autoCallEvalEveryMinutes}
+          onChange={onChange("autoCallEvalEveryMinutes")}
+        />
+      </div>
+
+      <div className="form-row">
+        <label htmlFor="autoCallPrePeakLeadMinutes">Pre-peak lead (minutes)</label>
+        <input
+          id="autoCallPrePeakLeadMinutes"
+          name="autoCallPrePeakLeadMinutes"
+          inputMode="numeric"
+          value={form.autoCallPrePeakLeadMinutes}
+          onChange={onChange("autoCallPrePeakLeadMinutes")}
+        />
+      </div>
+
+      <div className="form-row">
+        <label htmlFor="autoCallPrePeakLagMinutes">Pre-peak lag (minutes)</label>
+        <input
+          id="autoCallPrePeakLagMinutes"
+          name="autoCallPrePeakLagMinutes"
+          inputMode="numeric"
+          value={form.autoCallPrePeakLagMinutes}
+          onChange={onChange("autoCallPrePeakLagMinutes")}
+        />
+      </div>
+
+      <div className="form-row">
+        <label htmlFor="autoCallPeakLeadMinutes">Peak lead (minutes)</label>
+        <input
+          id="autoCallPeakLeadMinutes"
+          name="autoCallPeakLeadMinutes"
+          inputMode="numeric"
+          value={form.autoCallPeakLeadMinutes}
+          onChange={onChange("autoCallPeakLeadMinutes")}
+        />
+      </div>
+
+      <div className="form-row">
+        <label htmlFor="autoCallPeakLagMinutes">Peak lag (minutes)</label>
+        <input
+          id="autoCallPeakLagMinutes"
+          name="autoCallPeakLagMinutes"
+          inputMode="numeric"
+          value={form.autoCallPeakLagMinutes}
+          onChange={onChange("autoCallPeakLagMinutes")}
+        />
+      </div>
+
+      <div className="form-row">
+        <label htmlFor="autoCallPostPeakLeadMinutes">Post-peak lead (minutes)</label>
+        <input
+          id="autoCallPostPeakLeadMinutes"
+          name="autoCallPostPeakLeadMinutes"
+          inputMode="numeric"
+          value={form.autoCallPostPeakLeadMinutes}
+          onChange={onChange("autoCallPostPeakLeadMinutes")}
+        />
+      </div>
+
+      <div className="form-row">
+        <label htmlFor="autoCallPostPeakLagMinutes">Post-peak lag (minutes)</label>
+        <input
+          id="autoCallPostPeakLagMinutes"
+          name="autoCallPostPeakLagMinutes"
+          inputMode="numeric"
+          value={form.autoCallPostPeakLagMinutes}
+          onChange={onChange("autoCallPostPeakLagMinutes")}
+        />
+      </div>
+
+      <div className="form-row">
+        <label htmlFor="autoCallNearMaxThresholdF">Near-max threshold (F)</label>
+        <input
+          id="autoCallNearMaxThresholdF"
+          name="autoCallNearMaxThresholdF"
+          inputMode="numeric"
+          value={form.autoCallNearMaxThresholdF}
+          onChange={onChange("autoCallNearMaxThresholdF")}
+        />
       </div>
 
       <div className="actions">

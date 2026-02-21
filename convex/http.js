@@ -1,5 +1,6 @@
 import { httpRouter } from "convex/server";
 import { recordingAudioProxy, recordingWebhook } from "./twilioWebhook";
+import { dayCsvExport, historyCsvExport } from "./exports";
 
 const http = httpRouter();
 
@@ -19,6 +20,18 @@ http.route({
   path: "/twilio/recording-audio",
   method: "OPTIONS",
   handler: recordingAudioProxy,
+});
+
+http.route({
+  path: "/exports/history.csv",
+  method: "GET",
+  handler: historyCsvExport,
+});
+
+http.route({
+  path: "/exports/day.csv",
+  method: "GET",
+  handler: dayCsvExport,
 });
 
 export default http;

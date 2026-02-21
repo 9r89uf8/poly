@@ -30,6 +30,9 @@ export default function RootLayout({ children }) {
             </div>
             <nav className="site-nav" aria-label="Primary">
               <Link href="/">Dashboard</Link>
+              <Link href="/history">History</Link>
+              <Link href="/automation">Automation</Link>
+              <Link href="/calls">Calls</Link>
               <Link href="/market">Market</Link>
               <Link href="/observations">Observations</Link>
               <Link href="/alerts">Alerts</Link>

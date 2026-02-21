@@ -4,8 +4,10 @@ import { useEffect, useMemo, useState } from "react";
 import { useAction, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { getChicagoDayKey } from "@/lib/time";
+import { resolveConvexSiteUrl } from "@/lib/convex-site";
 
 const CALL_COOLDOWN_SECONDS = 60;
+const DECISION_LOG_LIMIT = 20;
 
 function getChicagoHour(input = Date.now()) {
   const value = new Intl.DateTimeFormat("en-US", {
@@ -28,24 +30,29 @@ function formatRemaining(seconds) {
   return `${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
 }
 
-function resolveConvexSiteUrl() {
-  if (process.env.NEXT_PUBLIC_CONVEX_URL?.endsWith(".convex.cloud")) {
-    return process.env.NEXT_PUBLIC_CONVEX_URL.replace(
-      ".convex.cloud",
-      ".convex.site",
-    );
+function getDecisionActionLabel(decision) {
+  if (decision?.decision === "CALL") {
+    return "CALL";
   }
 
-  if (process.env.NEXT_PUBLIC_CONVEX_SITE_URL) {
-    return process.env.NEXT_PUBLIC_CONVEX_SITE_URL;
+  if (
+    decision?.reasonCode === "SKIP_SHADOW_MODE" &&
+    decision?.reasonDetail?.wouldCallReason
+  ) {
+    return `WOULD_CALL (${decision.reasonDetail.wouldCallReason})`;
   }
 
-  return null;
+  return "SKIP";
 }
 
 export default function HealthPanel() {
+  const dayKey = getChicagoDayKey();
   const health = useQuery(api.dashboard.getHealth, {
-    dayKey: getChicagoDayKey(),
+    dayKey,
+  });
+  const autoDecisions = useQuery(api.autoCall.getRecentDecisions, {
+    dayKey,
+    limit: DECISION_LOG_LIMIT,
   });
   const latestCall = useQuery(api.calls.getLatestPhoneCall, {
     allDays: true,
@@ -149,7 +156,34 @@ export default function HealthPanel() {
           {health.pollStaleSeconds ?? "--"}
         </p>
       </div>
+      <div>
+        <p className="stat-label">Auto-call enabled</p>
+        <span className={`badge ${health.autoCallEnabled ? "badge-ok" : "badge-warn"}`}>
+          {health.autoCallEnabled ? "Yes" : "No"}
+        </span>
+      </div>
+      <div>
+        <p className="stat-label">Auto-call mode</p>
+        <p className="stat-value" style={{ fontSize: "1.2rem" }}>
+          {health.autoCallShadowMode ? "SHADOW" : "LIVE"}
+        </p>
+      </div>
+      <div>
+        <p className="stat-label">Auto calls today</p>
+        <p className="stat-value" style={{ fontSize: "1.2rem" }}>
+          {health.autoCallsToday ?? 0}
+        </p>
+      </div>
+      <div>
+        <p className="stat-label">Forecast peak time</p>
+        <p className="stat-value" style={{ fontSize: "1.2rem" }}>
+          {health.predictedMaxTimeLocal ?? "N/A"}
+        </p>
+      </div>
       <p className="muted">Recent data/failed-source alert count: {health.recentErrorsCount}</p>
+      <p className="muted">Last auto decision: {health.lastAutoDecisionReason ?? "N/A"}</p>
+      <p className="muted">Last auto decision time: {health.lastAutoDecisionLocal ?? "N/A"}</p>
+      <p className="muted">Forecast refreshed: {health.forecastFetchedAtLocal ?? "N/A"}</p>
 
       <section className="panel">
         <p className="stat-label">Airport phone temperature</p>
@@ -245,6 +279,46 @@ export default function HealthPanel() {
 
         {latestCall !== undefined && !latestCall && (
           <p className="muted">No manual airport calls have been made yet.</p>
+        )}
+      </section>
+
+      <section className="panel">
+        <p className="stat-label">Forecast automation</p>
+        <h3 style={{ marginTop: 0 }}>Auto-call decision log</h3>
+        <p className="muted" style={{ marginTop: 0 }}>
+          Read-only feed of recent decision evaluations.
+        </p>
+
+        {autoDecisions === undefined && (
+          <p className="muted">Loading decision log...</p>
+        )}
+
+        {autoDecisions && autoDecisions.length === 0 && (
+          <p className="muted">No auto-call decisions recorded yet.</p>
+        )}
+
+        {autoDecisions && autoDecisions.length > 0 && (
+          <div className="grid">
+            {autoDecisions.map((decision) => (
+              <article key={decision._id} className="panel">
+                <p className="muted" style={{ marginTop: 0, marginBottom: 6 }}>
+                  Decision time: {decision.evaluatedAtLocal ?? "N/A"}
+                </p>
+                <p className="muted" style={{ margin: 0 }}>
+                  Reason code: {decision.reasonCode ?? "N/A"}
+                </p>
+                <p className="muted" style={{ margin: 0 }}>
+                  Window: {decision.window ?? "OUTSIDE"}
+                </p>
+                <p className="muted" style={{ margin: 0 }}>
+                  Would-call vs call: {getDecisionActionLabel(decision)}
+                </p>
+                <p className="muted" style={{ marginBottom: 0 }}>
+                  CallSid: {decision.callSid ?? "--"}
+                </p>
+              </article>
+            ))}
+          </div>
         )}
       </section>
     </div>

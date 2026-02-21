@@ -24,6 +24,18 @@ export default defineSchema({
     weatherBackupUrl: v.string(),
     tempExtraction: extractionValidator,
     rounding: roundingValidator,
+    autoCallEnabled: v.optional(v.boolean()),
+    autoCallShadowMode: v.optional(v.boolean()),
+    autoCallMaxPerDay: v.optional(v.number()),
+    autoCallMinSpacingMinutes: v.optional(v.number()),
+    autoCallEvalEveryMinutes: v.optional(v.number()),
+    autoCallPrePeakLeadMinutes: v.optional(v.number()),
+    autoCallPrePeakLagMinutes: v.optional(v.number()),
+    autoCallPeakLeadMinutes: v.optional(v.number()),
+    autoCallPeakLagMinutes: v.optional(v.number()),
+    autoCallPostPeakLeadMinutes: v.optional(v.number()),
+    autoCallPostPeakLagMinutes: v.optional(v.number()),
+    autoCallNearMaxThresholdF: v.optional(v.number()),
     dayResetRule: v.string(),
     updatedAt: v.number(),
   }).index("by_key", ["key"]),
@@ -66,6 +78,21 @@ export default defineSchema({
     .index("by_dayKey", ["dayKey"])
     .index("by_dayKey_orderIndex", ["dayKey", "orderIndex"]),
 
+  binPriceSnapshots: defineTable({
+    dayKey: v.string(),
+    eventId: v.string(),
+    marketId: v.string(),
+    source: v.string(),
+    yesPrice: v.optional(v.number()),
+    noPrice: v.optional(v.number()),
+    fetchedAt: v.number(),
+    fetchedAtLocal: v.optional(v.string()),
+    createdAt: v.number(),
+  })
+    .index("by_dayKey", ["dayKey"])
+    .index("by_dayKey_fetchedAt", ["dayKey", "fetchedAt"])
+    .index("by_dayKey_marketId_fetchedAt", ["dayKey", "marketId", "fetchedAt"]),
+
   observations: defineTable({
     dayKey: v.string(),
     obsKey: v.string(),
@@ -79,6 +106,22 @@ export default defineSchema({
   })
     .index("by_dayKey", ["dayKey"])
     .index("by_dayKey_obsKey", ["dayKey", "obsKey"]),
+
+  forecastSnapshots: defineTable({
+    dayKey: v.string(),
+    source: v.string(),
+    fetchedAt: v.number(),
+    fetchedAtLocal: v.optional(v.string()),
+    forecastGeneratedAt: v.optional(v.number()),
+    predictedMaxTempF: v.optional(v.number()),
+    predictedMaxTimeLocal: v.optional(v.string()),
+    predictedMaxAtMs: v.optional(v.number()),
+    hourly: v.array(v.any()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_dayKey", ["dayKey"])
+    .index("by_dayKey_fetchedAt", ["dayKey", "fetchedAt"]),
 
   phoneCalls: defineTable({
     dayKey: v.string(),
@@ -108,6 +151,36 @@ export default defineSchema({
     .index("by_requestedAt", ["requestedAt"])
     .index("by_callSid", ["callSid"])
     .index("by_recordingSid", ["recordingSid"]),
+
+  autoCallDecisions: defineTable({
+    dayKey: v.string(),
+    decisionKey: v.string(),
+    evaluatedAt: v.number(),
+    evaluatedAtLocal: v.optional(v.string()),
+    decision: v.string(),
+    reasonCode: v.string(),
+    reasonDetail: v.optional(v.any()),
+    window: v.optional(v.string()),
+    predictedMaxTimeLocal: v.optional(v.string()),
+    predictedMaxAtMs: v.optional(v.number()),
+    callSid: v.optional(v.string()),
+    shadowMode: v.optional(v.boolean()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_dayKey_createdAt", ["dayKey", "createdAt"])
+    .index("by_decisionKey", ["decisionKey"]),
+
+  autoCallState: defineTable({
+    dayKey: v.string(),
+    enabled: v.boolean(),
+    shadowMode: v.boolean(),
+    autoCallsMade: v.number(),
+    lastAutoCallAt: v.optional(v.number()),
+    lastDecisionAt: v.optional(v.number()),
+    lastReasonCode: v.optional(v.string()),
+    updatedAt: v.number(),
+  }).index("by_dayKey", ["dayKey"]),
 
   dailyStats: defineTable({
     dayKey: v.string(),
@@ -143,4 +216,13 @@ export default defineSchema({
     notes: v.optional(v.string()),
     createdAt: v.number(),
   }).index("by_createdAt", ["createdAt"]),
+
+  tradeNotes: defineTable({
+    dayKey: v.string(),
+    note: v.string(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_dayKey", ["dayKey"])
+    .index("by_updatedAt", ["updatedAt"]),
 });
