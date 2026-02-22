@@ -11,7 +11,7 @@ export default function MarketPage() {
         <p className="stat-label">Market Picker</p>
         <h2 style={{ marginTop: 0 }}>Import and activate today’s Polymarket event</h2>
         <p className="muted">
-          Paste an event URL or slug, preview bins, then set the event active for the current Chicago day.
+          URL is auto-derived from today’s Chicago date. Use one-click auto import, or override with a custom URL/slug.
         </p>
       </section>
       <MarketClient />

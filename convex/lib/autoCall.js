@@ -1,4 +1,5 @@
 const MINUTE_MS = 60 * 1000;
+const HOUR_MS = 60 * MINUTE_MS;
 
 function toWholeMinutes(value, fallback = 5) {
   const parsed = Number(value);
@@ -8,8 +9,26 @@ function toWholeMinutes(value, fallback = 5) {
   return Math.max(1, Math.round(parsed));
 }
 
-function getFiniteTemp(value) {
-  return Number.isFinite(value) ? Number(value) : null;
+function toFiniteNumber(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function normalizeHourlyPeriods(hourlyPeriods) {
+  const periods = Array.isArray(hourlyPeriods) ? hourlyPeriods : [];
+  const normalized = [];
+
+  for (const period of periods) {
+    const startMs = toFiniteNumber(period?.startMs);
+    const tempF = toFiniteNumber(period?.tempF);
+    if (startMs === null || tempF === null) {
+      continue;
+    }
+    normalized.push({ startMs, tempF });
+  }
+
+  normalized.sort((a, b) => a.startMs - b.startMs);
+  return normalized;
 }
 
 export function isCallInFlight(status) {
@@ -25,111 +44,89 @@ export function buildDecisionKey(dayKey, nowMs, intervalMinutes = 5) {
   return `${dayKey}|${safeInterval}|${bucket}`;
 }
 
-export function classifyDecisionWindow({
-  nowMs,
-  predictedMaxAtMs,
-  settings,
-}) {
-  if (!Number.isFinite(nowMs) || !Number.isFinite(predictedMaxAtMs)) {
-    return "OUTSIDE";
+export function resolveHottestTwoHourWindow(hourlyPeriods) {
+  const periods = normalizeHourlyPeriods(hourlyPeriods);
+  if (periods.length === 0) {
+    return null;
   }
 
-  const preLead = toWholeMinutes(settings?.autoCallPrePeakLeadMinutes, 90);
-  const preLag = toWholeMinutes(settings?.autoCallPrePeakLagMinutes, 30);
-  const peakLead = toWholeMinutes(settings?.autoCallPeakLeadMinutes, 15);
-  const peakLag = toWholeMinutes(settings?.autoCallPeakLagMinutes, 45);
-  const postLead = toWholeMinutes(settings?.autoCallPostPeakLeadMinutes, 90);
-  const postLag = toWholeMinutes(settings?.autoCallPostPeakLagMinutes, 180);
+  let bestPair = null;
+  for (let index = 0; index < periods.length - 1; index += 1) {
+    const first = periods[index];
+    const second = periods[index + 1];
+    const gapMs = second.startMs - first.startMs;
 
-  const preStart = predictedMaxAtMs - (preLead * MINUTE_MS);
-  const preEnd = predictedMaxAtMs - (preLag * MINUTE_MS);
-  const peakStart = predictedMaxAtMs - (peakLead * MINUTE_MS);
-  const peakEnd = predictedMaxAtMs + (peakLag * MINUTE_MS);
-  const postStart = predictedMaxAtMs + (postLead * MINUTE_MS);
-  const postEnd = predictedMaxAtMs + (postLag * MINUTE_MS);
-
-  if (nowMs >= peakStart && nowMs <= peakEnd) {
-    return "PEAK";
-  }
-  if (nowMs >= preStart && nowMs <= preEnd) {
-    return "PRE_PEAK";
-  }
-  if (nowMs >= postStart && nowMs <= postEnd) {
-    return "POST_PEAK";
-  }
-
-  return "OUTSIDE";
-}
-
-export function computeRisingTrend(observations) {
-  const ordered = Array.isArray(observations) ? observations : [];
-  const temps = [];
-
-  for (const observation of ordered) {
-    const temp = getFiniteTemp(observation?.wuLikeTempWholeF);
-    if (temp === null) {
-      continue;
-    }
-    temps.push(temp);
-    if (temps.length >= 2) {
-      break;
-    }
-  }
-
-  if (temps.length < 2) {
-    return false;
-  }
-
-  return temps[0] > temps[1];
-}
-
-export function hasRecentHighObservation(observations, nowMs, withinMinutes = 60) {
-  const ordered = Array.isArray(observations) ? observations : [];
-  const cutoffMs = nowMs - (toWholeMinutes(withinMinutes, 60) * MINUTE_MS);
-
-  for (const observation of ordered) {
-    if (!observation?.isNewHigh) {
+    // NWS hourly periods should be 1 hour apart; keep small tolerance.
+    if (gapMs < 45 * MINUTE_MS || gapMs > 75 * MINUTE_MS) {
       continue;
     }
 
-    const timeMs = Date.parse(String(observation?.obsTimeUtc ?? ""));
-    if (Number.isFinite(timeMs) && timeMs >= cutoffMs) {
-      return true;
+    const pairTempSumF = first.tempF + second.tempF;
+    const pairPeakTempF = Math.max(first.tempF, second.tempF);
+    if (
+      !bestPair ||
+      pairTempSumF > bestPair.pairTempSumF ||
+      (pairTempSumF === bestPair.pairTempSumF &&
+        pairPeakTempF > bestPair.pairPeakTempF) ||
+      (pairTempSumF === bestPair.pairTempSumF &&
+        pairPeakTempF === bestPair.pairPeakTempF &&
+        first.startMs < bestPair.first.startMs)
+    ) {
+      bestPair = {
+        first,
+        second,
+        pairTempSumF,
+        pairPeakTempF,
+      };
     }
   }
 
-  return false;
+  if (bestPair) {
+    const hottestHour =
+      bestPair.second.tempF >= bestPair.first.tempF
+        ? bestPair.second
+        : bestPair.first;
+
+    return {
+      windowStartAtMs: bestPair.first.startMs,
+      windowEndAtMs: bestPair.first.startMs + (2 * HOUR_MS),
+      pairTempSumF: bestPair.pairTempSumF,
+      hottestHourAtMs: hottestHour.startMs,
+      hottestHourTempF: hottestHour.tempF,
+    };
+  }
+
+  let hottestHour = periods[0];
+  for (const period of periods) {
+    if (
+      period.tempF > hottestHour.tempF ||
+      (period.tempF === hottestHour.tempF && period.startMs < hottestHour.startMs)
+    ) {
+      hottestHour = period;
+    }
+  }
+
+  return {
+    windowStartAtMs: hottestHour.startMs - HOUR_MS,
+    windowEndAtMs: hottestHour.startMs + HOUR_MS,
+    pairTempSumF: hottestHour.tempF * 2,
+    hottestHourAtMs: hottestHour.startMs,
+    hottestHourTempF: hottestHour.tempF,
+  };
 }
 
-export function shouldCallForWindow(window, context) {
-  const nearForecastMax = Boolean(context?.nearForecastMax);
-  const risingNow = Boolean(context?.risingNow);
-  const highChangedRecently = Boolean(context?.highChangedRecently);
-
-  if (window === "PRE_PEAK") {
-    return nearForecastMax && risingNow;
-  }
-
-  if (window === "PEAK") {
-    return nearForecastMax || risingNow;
-  }
-
-  if (window === "POST_PEAK") {
-    return highChangedRecently || risingNow;
-  }
-
-  return false;
-}
-
-export function toNearMaxFlag(currentTempWholeF, predictedMaxTempF, thresholdF = 1) {
-  const current = getFiniteTemp(currentTempWholeF);
-  const predicted = getFiniteTemp(predictedMaxTempF);
-  const threshold = Math.abs(Number(thresholdF));
-
-  if (current === null || predicted === null || !Number.isFinite(threshold)) {
+export function isInsideHottestWindow(nowMs, window) {
+  const startMs = toFiniteNumber(window?.windowStartAtMs);
+  const endMs = toFiniteNumber(window?.windowEndAtMs);
+  if (
+    !Number.isFinite(nowMs) ||
+    startMs === null ||
+    endMs === null ||
+    endMs <= startMs
+  ) {
     return false;
   }
 
-  return Math.abs(current - predicted) <= threshold;
+  // End is exclusive to avoid an extra call exactly at the boundary.
+  return nowMs >= startMs && nowMs < endMs;
 }
-

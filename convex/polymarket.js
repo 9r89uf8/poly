@@ -8,9 +8,47 @@ import {
 import { api, internal as internalApi } from "./_generated/api";
 import { v } from "convex/values";
 import { formatUtcToChicago, getChicagoDayKey } from "./lib/time";
+import {
+  assertDayKey,
+  buildChicagoHighestTempSlugForDayKey,
+  buildChicagoHighestTempUrlForDayKey,
+} from "./lib/polymarket";
 
 const GAMMA_BASE_URL = "https://gamma-api.polymarket.com";
 const MAX_PRICE_SNAPSHOT_WRITES = 300;
+const AUTO_MARKET_TARGET_HOUR_CHICAGO = 2;
+
+function toErrorMessage(error) {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  if (typeof error === "string") {
+    return error;
+  }
+  return "Unknown error";
+}
+
+function getChicagoClockParts(input = Date.now()) {
+  const date = input instanceof Date ? input : new Date(input);
+  const formatter = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Chicago",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+  const parts = formatter.formatToParts(date);
+  const values = parts.reduce((acc, part) => {
+    if (part.type !== "literal") {
+      acc[part.type] = part.value;
+    }
+    return acc;
+  }, {});
+
+  return {
+    hour: Number(values.hour),
+    minute: Number(values.minute),
+  };
+}
 
 function extractSlug(input) {
   const trimmed = input.trim();
@@ -232,6 +270,25 @@ function normalizeBin(market, orderIndex) {
   };
 }
 
+function normalizeGammaEventPayload(payload, slugFallback) {
+  const event = {
+    eventId: String(payload.id ?? payload.eventId),
+    slug: payload.slug ?? slugFallback,
+    title: payload.title ?? payload.name ?? slugFallback,
+    endDate: payload.endDate ?? payload.end_date ?? null,
+    resolutionSource: payload.resolutionSource ?? null,
+    metadata: {
+      rawMarketCount: Array.isArray(payload.markets) ? payload.markets.length : 0,
+    },
+  };
+
+  const bins = Array.isArray(payload.markets)
+    ? payload.markets.map((market, index) => normalizeBin(market, index))
+    : [];
+
+  return { event, bins };
+}
+
 export const importEventBySlugOrUrl = action({
   args: {
     input: v.string(),
@@ -239,27 +296,163 @@ export const importEventBySlugOrUrl = action({
   handler: async (_ctx, args) => {
     const slug = extractSlug(args.input);
     const payload = await fetchGammaEventBySlug(slug);
-
-    const event = {
-      eventId: String(payload.id ?? payload.eventId),
-      slug: payload.slug ?? slug,
-      title: payload.title ?? payload.name ?? slug,
-      endDate: payload.endDate ?? payload.end_date ?? null,
-      resolutionSource: payload.resolutionSource ?? null,
-      metadata: {
-        rawMarketCount: Array.isArray(payload.markets) ? payload.markets.length : 0,
-      },
-    };
-
-    const bins = Array.isArray(payload.markets)
-      ? payload.markets.map((market, index) => normalizeBin(market, index))
-      : [];
+    const { event, bins } = normalizeGammaEventPayload(payload, slug);
 
     return {
       event,
       bins,
       slug,
     };
+  },
+});
+
+export const getSuggestedMarketInput = query({
+  args: {
+    dayKey: v.optional(v.string()),
+  },
+  handler: async (_ctx, args) => {
+    const dayKey = assertDayKey(args.dayKey ?? getChicagoDayKey());
+    const slug = buildChicagoHighestTempSlugForDayKey(dayKey);
+    const url = buildChicagoHighestTempUrlForDayKey(dayKey);
+
+    return {
+      dayKey,
+      slug,
+      url,
+    };
+  },
+});
+
+export const importAndSetActiveMarketForDay = action({
+  args: {
+    dayKey: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const dayKey = assertDayKey(args.dayKey ?? getChicagoDayKey());
+    const slug = buildChicagoHighestTempSlugForDayKey(dayKey);
+    const url = buildChicagoHighestTempUrlForDayKey(dayKey);
+    const payload = await fetchGammaEventBySlug(slug);
+    const { event, bins } = normalizeGammaEventPayload(payload, slug);
+
+    await ctx.runMutation(api.polymarket.upsertEvent, { event });
+    await ctx.runMutation(api.polymarket.replaceBinsForDay, {
+      dayKey,
+      eventId: event.eventId,
+      bins: bins.map((bin) => ({
+        marketId: String(bin.marketId),
+        label: String(bin.label),
+        lowerBoundF:
+          bin.lowerBoundF === null || bin.lowerBoundF === undefined
+            ? null
+            : Number(bin.lowerBoundF),
+        upperBoundF:
+          bin.upperBoundF === null || bin.upperBoundF === undefined
+            ? null
+            : Number(bin.upperBoundF),
+        isLowerOpenEnded: Boolean(bin.isLowerOpenEnded),
+        isUpperOpenEnded: Boolean(bin.isUpperOpenEnded),
+        yesTokenId: bin.yesTokenId ? String(bin.yesTokenId) : null,
+        noTokenId: bin.noTokenId ? String(bin.noTokenId) : null,
+        orderIndex: Number(bin.orderIndex),
+      })),
+    });
+    await ctx.runMutation(api.polymarket.setActiveMarketForDay, {
+      dayKey,
+      eventId: event.eventId,
+      slug: event.slug,
+    });
+
+    let priceRefresh = null;
+    try {
+      priceRefresh = await ctx.runAction(internalApi.polymarket.refreshBinPriceSnapshots, {
+        dayKey,
+      });
+    } catch {
+      // Price snapshots are best-effort; activation should still succeed.
+    }
+
+    return {
+      ok: true,
+      dayKey,
+      slug,
+      url,
+      event,
+      bins,
+      priceRefresh,
+    };
+  },
+});
+
+export const ensureActiveMarketForToday = internalAction({
+  args: {
+    dayKey: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    const dayKey = assertDayKey(args.dayKey ?? getChicagoDayKey(now));
+    const clock = getChicagoClockParts(now);
+
+    if (!args.dayKey && clock.hour !== AUTO_MARKET_TARGET_HOUR_CHICAGO) {
+      return {
+        ok: true,
+        skipped: "SKIP_NOT_2AM_CHICAGO",
+        dayKey,
+      };
+    }
+
+    const activeMarket = await ctx.runQuery(api.polymarket.getActiveMarket, { dayKey });
+
+    if (activeMarket?.day?.activeEventId && activeMarket?.day?.activeEventSlug) {
+      return {
+        ok: true,
+        skipped: "ALREADY_ACTIVE",
+        dayKey,
+        slug: activeMarket.day.activeEventSlug,
+      };
+    }
+
+    const slug = buildChicagoHighestTempSlugForDayKey(dayKey);
+    try {
+      const imported = await ctx.runAction(api.polymarket.importAndSetActiveMarketForDay, {
+        dayKey,
+      });
+
+      await ctx.runMutation(api.weather.insertAlert, {
+        dayKey,
+        type: "MARKET_AUTO_SET_ACTIVE",
+        payload: {
+          dayKey,
+          slug: imported.slug,
+          eventId: imported.event?.eventId ?? null,
+        },
+      });
+
+      return {
+        ok: true,
+        dayKey,
+        slug: imported.slug,
+        eventId: imported.event?.eventId ?? null,
+        bins: Array.isArray(imported.bins) ? imported.bins.length : 0,
+      };
+    } catch (error) {
+      const reason = toErrorMessage(error);
+      await ctx.runMutation(api.weather.insertAlert, {
+        dayKey,
+        type: "MARKET_AUTO_IMPORT_FAILED",
+        payload: {
+          dayKey,
+          slug,
+          reason,
+        },
+      });
+
+      return {
+        ok: false,
+        dayKey,
+        slug,
+        reason,
+      };
+    }
   },
 });
 

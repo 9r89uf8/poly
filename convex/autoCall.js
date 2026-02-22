@@ -6,13 +6,14 @@ import { DEFAULT_SETTINGS } from "./lib/constants";
 import { normalizeSettings } from "./lib/settings";
 import {
   buildDecisionKey,
-  classifyDecisionWindow,
-  computeRisingTrend,
-  hasRecentHighObservation,
   isCallInFlight,
-  shouldCallForWindow,
-  toNearMaxFlag,
+  isInsideHottestWindow,
+  resolveHottestTwoHourWindow,
 } from "./lib/autoCall";
+
+const AUTO_CALL_CADENCE_MINUTES = 20;
+const CALL_WINDOW_LABEL = "PEAK_2H";
+const CALL_REASON_CODE = "CALL_PEAK_2H_WINDOW";
 
 function toErrorMessage(error) {
   if (error instanceof Error) {
@@ -24,35 +25,40 @@ function toErrorMessage(error) {
   return "Unknown error";
 }
 
-function toMinutes(value, fallback) {
+function pickDefinedFields(value) {
+  return Object.fromEntries(
+    Object.entries(value ?? {}).filter(([, fieldValue]) => fieldValue !== undefined),
+  );
+}
+
+function toFiniteNumberOrUndefined(value) {
   const parsed = Number(value);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
-    return fallback;
-  }
-  return Math.max(1, Math.round(parsed));
+  return Number.isFinite(parsed) ? parsed : undefined;
 }
 
-function getCallReasonForWindow(window) {
-  if (window === "PRE_PEAK") {
-    return "CALL_PRE_PEAK";
-  }
-  if (window === "PEAK") {
-    return "CALL_PEAK";
-  }
-  if (window === "POST_PEAK") {
-    return "CALL_POST_PEAK";
-  }
-  return "CALL_PEAK";
-}
+function toWindowDetail(window) {
+  const startMs = Number(window?.windowStartAtMs);
+  const endMs = Number(window?.windowEndAtMs);
+  const hottestHourAtMs = Number(window?.hottestHourAtMs);
+  const hottestHourTempF = Number(window?.hottestHourTempF);
+  const pairTempSumF = Number(window?.pairTempSumF);
 
-function getSkipReasonForWindow(window) {
-  if (window === "PRE_PEAK") {
-    return "SKIP_PRE_PEAK_NOT_READY";
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) {
+    return null;
   }
-  if (window === "POST_PEAK") {
-    return "SKIP_POST_PEAK_NO_UPTREND";
-  }
-  return "SKIP_PEAK_NOT_READY";
+
+  return {
+    windowStartAtMs: startMs,
+    windowEndAtMs: endMs,
+    windowStartLocal: formatUtcToChicago(startMs, true),
+    windowEndLocal: formatUtcToChicago(endMs, true),
+    hottestHourAtMs: Number.isFinite(hottestHourAtMs) ? hottestHourAtMs : null,
+    hottestHourLocal: Number.isFinite(hottestHourAtMs)
+      ? formatUtcToChicago(hottestHourAtMs, true)
+      : null,
+    hottestHourTempF: Number.isFinite(hottestHourTempF) ? hottestHourTempF : null,
+    pairTempSumF: Number.isFinite(pairTempSumF) ? pairTempSumF : null,
+  };
 }
 
 const decisionPatchValidator = v.object({
@@ -80,17 +86,6 @@ const simulationOverridesValidator = v.object({
   autoCallPostPeakLagMinutes: v.optional(v.number()),
   autoCallNearMaxThresholdF: v.optional(v.number()),
 });
-
-function pickDefinedFields(value) {
-  return Object.fromEntries(
-    Object.entries(value ?? {}).filter(([, fieldValue]) => fieldValue !== undefined),
-  );
-}
-
-function toFiniteNumberOrUndefined(value) {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : undefined;
-}
 
 function applySimulationOverrides(baseSettings, overrides = {}) {
   const next = {
@@ -140,8 +135,7 @@ export const evaluateAndMaybeCall = internalAction({
     const evaluatedAtLocal = formatUtcToChicago(now, true);
 
     const settings = await ctx.runQuery(api.settings.getSettings, {});
-    const evalEveryMinutes = toMinutes(settings.autoCallEvalEveryMinutes, 5);
-    const decisionKey = buildDecisionKey(dayKey, now, evalEveryMinutes);
+    const decisionKey = buildDecisionKey(dayKey, now, AUTO_CALL_CADENCE_MINUTES);
 
     const claimed = await ctx.runMutation(internal.autoCall.createDecisionPlaceholder, {
       dayKey,
@@ -160,26 +154,14 @@ export const evaluateAndMaybeCall = internalAction({
       };
     }
 
-    const state = await ctx.runQuery(api.autoCall.getAutoCallState, { dayKey });
     const dashboard = await ctx.runQuery(api.dashboard.getDashboard, {
       dayKey,
-      observationsLimit: 10,
+      observationsLimit: 2,
       alertsLimit: 1,
     });
-    let forecastSnapshot = await ctx.runQuery(api.forecast.getLatestForecastSnapshot, {
+    const forecastSnapshot = await ctx.runQuery(api.forecast.getLatestForecastSnapshot, {
       dayKey,
     });
-
-    if (!forecastSnapshot) {
-      try {
-        await ctx.runAction(internal.forecast.refreshForecastSnapshot, { dayKey });
-        forecastSnapshot = await ctx.runQuery(api.forecast.getLatestForecastSnapshot, {
-          dayKey,
-        });
-      } catch {
-        // Forecast refresh failure is already alerted in forecast module.
-      }
-    }
     const latestCall = await ctx.runQuery(api.calls.getLatestPhoneCall, {
       allDays: true,
     });
@@ -190,98 +172,58 @@ export const evaluateAndMaybeCall = internalAction({
     let window = "OUTSIDE";
     let callSid = undefined;
 
-    const autoCallsMade = Number(state?.autoCallsMade ?? 0);
-    const spacingMinutes = toMinutes(settings.autoCallMinSpacingMinutes, 45);
-    const spacingMs = spacingMinutes * 60 * 1000;
-    const maxPerDay = Math.max(0, Math.round(Number(settings.autoCallMaxPerDay ?? 0)));
-    const lastAutoCallAt = Number(state?.lastAutoCallAt);
     const predictedMaxAtMs = Number(forecastSnapshot?.predictedMaxAtMs);
-    const currentTempWholeF = dashboard.dailyStats?.currentTempWholeF;
-    const predictedMaxTempF = forecastSnapshot?.predictedMaxTempF;
+    const callWindow = resolveHottestTwoHourWindow(forecastSnapshot?.hourly);
+    const inCallWindow = isInsideHottestWindow(now, callWindow);
+    const windowDetail = toWindowDetail(callWindow);
+    const baseWindowDetail = windowDetail ?? {};
+    window = inCallWindow ? CALL_WINDOW_LABEL : "OUTSIDE";
 
     if (!settings.autoCallEnabled) {
       reasonCode = "SKIP_DISABLED";
-    } else if (!forecastSnapshot || !Number.isFinite(predictedMaxAtMs)) {
+    } else if (!forecastSnapshot || !callWindow) {
       reasonCode = "SKIP_NO_FORECAST";
     } else if (dashboard.dailyStats?.isStale) {
       reasonCode = "SKIP_DATA_STALE";
+    } else if (!inCallWindow) {
+      reasonCode = "SKIP_OUTSIDE_WINDOW";
+      reasonDetail = {
+        ...baseWindowDetail,
+        nowLocal: evaluatedAtLocal,
+      };
     } else if (latestCall && isCallInFlight(latestCall.status)) {
       reasonCode = "SKIP_CALL_IN_FLIGHT";
-      reasonDetail = { latestCallStatus: latestCall.status };
-    } else if (autoCallsMade >= maxPerDay) {
-      reasonCode = "SKIP_DAILY_CAP";
-      reasonDetail = { autoCallsMade, maxPerDay };
-    } else if (
-      Number.isFinite(lastAutoCallAt) &&
-      now - lastAutoCallAt < spacingMs
-    ) {
-      reasonCode = "SKIP_MIN_SPACING";
       reasonDetail = {
-        spacingMinutes,
-        remainingSeconds: Math.ceil((spacingMs - (now - lastAutoCallAt)) / 1000),
+        ...baseWindowDetail,
+        latestCallStatus: latestCall.status,
+      };
+    } else if (settings.autoCallShadowMode) {
+      reasonCode = "SKIP_SHADOW_MODE";
+      reasonDetail = {
+        ...baseWindowDetail,
+        wouldCallReason: CALL_REASON_CODE,
       };
     } else {
-      window = classifyDecisionWindow({
-        nowMs: now,
-        predictedMaxAtMs,
-        settings,
-      });
+      decision = "CALL";
+      reasonCode = CALL_REASON_CODE;
 
-      if (window === "OUTSIDE") {
-        reasonCode = "SKIP_OUTSIDE_WINDOW";
-      } else {
-        const observations = dashboard.observations ?? [];
-        const risingNow = computeRisingTrend(observations);
-        const nearForecastMax = toNearMaxFlag(
-          currentTempWholeF,
-          predictedMaxTempF,
-          settings.autoCallNearMaxThresholdF,
-        );
-        const highChangedRecently = hasRecentHighObservation(observations, now, 60);
-
-        const windowCallAllowed = shouldCallForWindow(window, {
-          risingNow,
-          nearForecastMax,
-          highChangedRecently,
+      try {
+        const callResult = await ctx.runAction(api.airportCalls.requestManualAirportCall, {
+          requestedBy: "forecast_automation",
         });
-
-        if (!windowCallAllowed) {
-          reasonCode = getSkipReasonForWindow(window);
-          reasonDetail = {
-            risingNow,
-            nearForecastMax,
-            highChangedRecently,
-            currentTempWholeF,
-            predictedMaxTempF,
-          };
-        } else if (settings.autoCallShadowMode) {
-          reasonCode = "SKIP_SHADOW_MODE";
-          reasonDetail = {
-            wouldCallReason: getCallReasonForWindow(window),
-            risingNow,
-            nearForecastMax,
-            highChangedRecently,
-          };
-        } else {
-          decision = "CALL";
-          reasonCode = getCallReasonForWindow(window);
-          try {
-            const callResult = await ctx.runAction(api.airportCalls.requestManualAirportCall, {
-              requestedBy: "forecast_automation",
-            });
-            callSid = callResult?.callSid;
-            reasonDetail = {
-              requestedAtLocal: callResult?.requestedAtLocal ?? evaluatedAtLocal,
-              warning: callResult?.warning ?? null,
-            };
-          } catch (error) {
-            reasonCode = "CALL_FAILED";
-            reasonDetail = {
-              error: toErrorMessage(error),
-              intendedReason: getCallReasonForWindow(window),
-            };
-          }
-        }
+        callSid = callResult?.callSid;
+        reasonDetail = {
+          ...baseWindowDetail,
+          requestedAtLocal: callResult?.requestedAtLocal ?? evaluatedAtLocal,
+          warning: callResult?.warning ?? null,
+        };
+      } catch (error) {
+        reasonCode = "CALL_FAILED";
+        reasonDetail = {
+          ...baseWindowDetail,
+          error: toErrorMessage(error),
+          intendedReason: CALL_REASON_CODE,
+        };
       }
     }
 
@@ -321,6 +263,8 @@ export const evaluateAndMaybeCall = internalAction({
           decisionKey,
           callSid: callSid ?? null,
           predictedMaxTimeLocal: forecastSnapshot?.predictedMaxTimeLocal ?? null,
+          callWindowStartLocal: windowDetail?.windowStartLocal ?? null,
+          callWindowEndLocal: windowDetail?.windowEndLocal ?? null,
         },
       });
     } else if (reasonCode === "CALL_FAILED") {
@@ -497,7 +441,7 @@ export const simulateCurrentDecision = query({
       args.overrides ?? {},
     );
 
-    const [state, dailyStats, observations, forecastSnapshot, latestCall] = await Promise.all([
+    const [state, dailyStats, forecastSnapshot, latestCall] = await Promise.all([
       ctx.db
         .query("autoCallState")
         .withIndex("by_dayKey", (q) => q.eq("dayKey", dayKey))
@@ -506,11 +450,6 @@ export const simulateCurrentDecision = query({
         .query("dailyStats")
         .withIndex("by_dayKey", (q) => q.eq("dayKey", dayKey))
         .unique(),
-      ctx.db
-        .query("observations")
-        .withIndex("by_dayKey", (q) => q.eq("dayKey", dayKey))
-        .order("desc")
-        .take(10),
       ctx.db
         .query("forecastSnapshots")
         .withIndex("by_dayKey_fetchedAt", (q) => q.eq("dayKey", dayKey))
@@ -523,87 +462,46 @@ export const simulateCurrentDecision = query({
         .first(),
     ]);
 
-    const autoCallsMade = Number(state?.autoCallsMade ?? 0);
-    const spacingMinutes = toMinutes(settings.autoCallMinSpacingMinutes, 45);
-    const spacingMs = spacingMinutes * 60 * 1000;
-    const maxPerDay = Math.max(0, Math.round(Number(settings.autoCallMaxPerDay ?? 0)));
-    const lastAutoCallAt = Number(state?.lastAutoCallAt);
-    const predictedMaxAtMs = Number(forecastSnapshot?.predictedMaxAtMs);
-    const currentTempWholeF = dailyStats?.currentTempWholeF;
-    const predictedMaxTempF = forecastSnapshot?.predictedMaxTempF;
-
-    const risingNow = computeRisingTrend(observations);
-    const nearForecastMax = toNearMaxFlag(
-      currentTempWholeF,
-      predictedMaxTempF,
-      settings.autoCallNearMaxThresholdF,
-    );
-    const highChangedRecently = hasRecentHighObservation(observations, now, 60);
+    const callWindow = resolveHottestTwoHourWindow(forecastSnapshot?.hourly);
+    const inCallWindow = isInsideHottestWindow(now, callWindow);
+    const windowDetail = toWindowDetail(callWindow);
 
     let decision = "SKIP";
     let reasonCode = "SKIP_DISABLED";
     let reasonDetail = null;
     let window = "OUTSIDE";
 
+    if (inCallWindow) {
+      window = CALL_WINDOW_LABEL;
+    }
+
     if (!settings.autoCallEnabled) {
       reasonCode = "SKIP_DISABLED";
-    } else if (!forecastSnapshot || !Number.isFinite(predictedMaxAtMs)) {
+    } else if (!forecastSnapshot || !callWindow) {
       reasonCode = "SKIP_NO_FORECAST";
     } else if (dailyStats?.isStale) {
       reasonCode = "SKIP_DATA_STALE";
+    } else if (!inCallWindow) {
+      reasonCode = "SKIP_OUTSIDE_WINDOW";
+      reasonDetail = {
+        ...(windowDetail ?? {}),
+        nowLocal: formatUtcToChicago(now, true),
+      };
     } else if (latestCall && isCallInFlight(latestCall.status)) {
       reasonCode = "SKIP_CALL_IN_FLIGHT";
-      reasonDetail = { latestCallStatus: latestCall.status };
-    } else if (autoCallsMade >= maxPerDay) {
-      reasonCode = "SKIP_DAILY_CAP";
-      reasonDetail = { autoCallsMade, maxPerDay };
-    } else if (
-      Number.isFinite(lastAutoCallAt) &&
-      now - lastAutoCallAt < spacingMs
-    ) {
-      reasonCode = "SKIP_MIN_SPACING";
       reasonDetail = {
-        spacingMinutes,
-        remainingSeconds: Math.ceil((spacingMs - (now - lastAutoCallAt)) / 1000),
+        ...(windowDetail ?? {}),
+        latestCallStatus: latestCall.status,
+      };
+    } else if (settings.autoCallShadowMode) {
+      reasonCode = "SKIP_SHADOW_MODE";
+      reasonDetail = {
+        ...(windowDetail ?? {}),
+        wouldCallReason: CALL_REASON_CODE,
       };
     } else {
-      window = classifyDecisionWindow({
-        nowMs: now,
-        predictedMaxAtMs,
-        settings,
-      });
-
-      if (window === "OUTSIDE") {
-        reasonCode = "SKIP_OUTSIDE_WINDOW";
-      } else {
-        const windowCallAllowed = shouldCallForWindow(window, {
-          risingNow,
-          nearForecastMax,
-          highChangedRecently,
-        });
-
-        if (!windowCallAllowed) {
-          reasonCode = getSkipReasonForWindow(window);
-          reasonDetail = {
-            risingNow,
-            nearForecastMax,
-            highChangedRecently,
-            currentTempWholeF,
-            predictedMaxTempF,
-          };
-        } else if (settings.autoCallShadowMode) {
-          reasonCode = "SKIP_SHADOW_MODE";
-          reasonDetail = {
-            wouldCallReason: getCallReasonForWindow(window),
-            risingNow,
-            nearForecastMax,
-            highChangedRecently,
-          };
-        } else {
-          decision = "CALL";
-          reasonCode = getCallReasonForWindow(window);
-        }
-      }
+      decision = "CALL";
+      reasonCode = CALL_REASON_CODE;
     }
 
     return {
@@ -615,28 +513,19 @@ export const simulateCurrentDecision = query({
       reasonDetail,
       window,
       signals: {
-        risingNow,
-        nearForecastMax,
-        highChangedRecently,
+        hasForecastWindow: Boolean(callWindow),
+        inPeakTwoHourWindow: inCallWindow,
       },
       guards: {
         enabled: Boolean(settings.autoCallEnabled),
-        hasForecast: Boolean(
-          forecastSnapshot && Number.isFinite(predictedMaxAtMs),
-        ),
+        hasForecast: Boolean(callWindow),
         dataFresh: !Boolean(dailyStats?.isStale),
+        inWindow: inCallWindow,
         callInFlight: Boolean(latestCall && isCallInFlight(latestCall.status)),
-        dailyCapReached: autoCallsMade >= maxPerDay,
-        minSpacingBlocked:
-          Number.isFinite(lastAutoCallAt) &&
-          now - lastAutoCallAt < spacingMs,
       },
       context: {
-        currentTempWholeF: Number.isFinite(Number(currentTempWholeF))
-          ? Number(currentTempWholeF)
-          : null,
-        predictedMaxTempF: Number.isFinite(Number(predictedMaxTempF))
-          ? Number(predictedMaxTempF)
+        predictedMaxTempF: Number.isFinite(Number(forecastSnapshot?.predictedMaxTempF))
+          ? Number(forecastSnapshot.predictedMaxTempF)
           : null,
         predictedMaxTimeLocal: forecastSnapshot?.predictedMaxTimeLocal ?? null,
         latestForecastFetchedAtLocal:
@@ -644,26 +533,15 @@ export const simulateCurrentDecision = query({
           (forecastSnapshot?.fetchedAt
             ? formatUtcToChicago(forecastSnapshot.fetchedAt, true)
             : null),
-        autoCallsMade,
-        maxPerDay,
-        spacingMinutes,
-        lastAutoCallAtLocal: Number.isFinite(lastAutoCallAt)
-          ? formatUtcToChicago(lastAutoCallAt, true)
-          : null,
+        callWindowStartLocal: windowDetail?.windowStartLocal ?? null,
+        callWindowEndLocal: windowDetail?.windowEndLocal ?? null,
+        hottestHourLocal: windowDetail?.hottestHourLocal ?? null,
+        autoCallsMade: Number(state?.autoCallsMade ?? 0),
       },
       settingsUsed: {
         autoCallEnabled: Boolean(settings.autoCallEnabled),
         autoCallShadowMode: Boolean(settings.autoCallShadowMode),
-        autoCallMaxPerDay: Number(settings.autoCallMaxPerDay),
-        autoCallMinSpacingMinutes: Number(settings.autoCallMinSpacingMinutes),
-        autoCallEvalEveryMinutes: Number(settings.autoCallEvalEveryMinutes),
-        autoCallPrePeakLeadMinutes: Number(settings.autoCallPrePeakLeadMinutes),
-        autoCallPrePeakLagMinutes: Number(settings.autoCallPrePeakLagMinutes),
-        autoCallPeakLeadMinutes: Number(settings.autoCallPeakLeadMinutes),
-        autoCallPeakLagMinutes: Number(settings.autoCallPeakLagMinutes),
-        autoCallPostPeakLeadMinutes: Number(settings.autoCallPostPeakLeadMinutes),
-        autoCallPostPeakLagMinutes: Number(settings.autoCallPostPeakLagMinutes),
-        autoCallNearMaxThresholdF: Number(settings.autoCallNearMaxThresholdF),
+        autoCallCadenceMinutes: AUTO_CALL_CADENCE_MINUTES,
       },
     };
   },

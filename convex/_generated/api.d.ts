@@ -21,6 +21,7 @@ import type * as lib_autoCall from "../lib/autoCall.js";
 import type * as lib_calibration from "../lib/calibration.js";
 import type * as lib_constants from "../lib/constants.js";
 import type * as lib_freshness from "../lib/freshness.js";
+import type * as lib_polymarket from "../lib/polymarket.js";
 import type * as lib_settings from "../lib/settings.js";
 import type * as lib_time from "../lib/time.js";
 import type * as lib_weather from "../lib/weather.js";
@@ -51,6 +52,7 @@ declare const fullApi: ApiFromModules<{
   "lib/calibration": typeof lib_calibration;
   "lib/constants": typeof lib_constants;
   "lib/freshness": typeof lib_freshness;
+  "lib/polymarket": typeof lib_polymarket;
   "lib/settings": typeof lib_settings;
   "lib/time": typeof lib_time;
   "lib/weather": typeof lib_weather;

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useAction, useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { getChicagoDayKey } from "@/lib/time";
@@ -28,6 +28,7 @@ export default function MarketClient() {
   const dayKey = useMemo(() => getChicagoDayKey(), []);
 
   const importEventBySlugOrUrl = useAction(api.polymarket.importEventBySlugOrUrl);
+  const importAndSetActiveMarketForDay = useAction(api.polymarket.importAndSetActiveMarketForDay);
   const refreshBinPriceSnapshotsNow = useAction(api.polymarket.refreshBinPriceSnapshotsNow);
   const upsertEvent = useMutation(api.polymarket.upsertEvent);
   const replaceBinsForDay = useMutation(api.polymarket.replaceBinsForDay);
@@ -35,8 +36,10 @@ export default function MarketClient() {
 
   const activeMarket = useQuery(api.polymarket.getActiveMarket, { dayKey });
   const todaysBins = useQuery(api.polymarket.getBins, { dayKey });
+  const suggestedMarketInput = useQuery(api.polymarket.getSuggestedMarketInput, { dayKey });
 
   const [inputValue, setInputValue] = useState("");
+  const [didAutofillInput, setDidAutofillInput] = useState(false);
   const [preview, setPreview] = useState(null);
   const [status, setStatus] = useState("idle");
   const [error, setError] = useState(null);
@@ -44,20 +47,56 @@ export default function MarketClient() {
   const boundsWarnings =
     preview?.bins?.filter((bin) => bin.boundsParsingFailed).length ?? 0;
 
+  useEffect(() => {
+    if (didAutofillInput || !suggestedMarketInput?.url) {
+      return;
+    }
+    setInputValue(suggestedMarketInput.url);
+    setDidAutofillInput(true);
+  }, [didAutofillInput, suggestedMarketInput?.url]);
+
   const handleImport = async (event) => {
     event.preventDefault();
     setStatus("importing");
     setError(null);
 
     try {
+      const input = inputValue.trim() || String(suggestedMarketInput?.url ?? "").trim();
+      if (!input) {
+        throw new Error("No market URL could be derived for today.");
+      }
+
       const imported = await importEventBySlugOrUrl({
-        input: inputValue,
+        input,
       });
       setPreview(imported);
+      setInputValue(input);
       setStatus("imported");
     } catch (importError) {
       setStatus("error");
       setError(importError.message ?? "Import failed.");
+    }
+  };
+
+  const handleAutoImportAndSetActive = async () => {
+    setStatus("autoconfiguring");
+    setError(null);
+
+    try {
+      const result = await importAndSetActiveMarketForDay({ dayKey });
+      setPreview({
+        event: result.event,
+        bins: result.bins,
+        slug: result.slug,
+      });
+      if (result.url) {
+        setInputValue(String(result.url));
+      }
+      setStatus("saved");
+      setTimeout(() => setStatus("idle"), 1500);
+    } catch (autoError) {
+      setStatus("error");
+      setError(autoError.message ?? "Could not auto-import today’s market.");
     }
   };
 
@@ -131,11 +170,25 @@ export default function MarketClient() {
               placeholder="e.g. chicago-ohare-high-temp-feb-18"
               value={inputValue}
               onChange={(event) => setInputValue(event.target.value)}
-              required
             />
           </div>
+          {suggestedMarketInput?.url ? (
+            <p className="muted" style={{ marginTop: 0 }}>
+              Suggested for {dayKey}: {suggestedMarketInput.url}
+            </p>
+          ) : null}
           <div className="actions">
-            <button type="submit" disabled={status === "importing" || status === "saving"}>
+            <button
+              type="button"
+              onClick={handleAutoImportAndSetActive}
+              disabled={status === "importing" || status === "saving" || status === "autoconfiguring"}
+            >
+              {status === "autoconfiguring" ? "Auto-setting..." : "Auto import + set active"}
+            </button>
+            <button
+              type="submit"
+              disabled={status === "importing" || status === "saving" || status === "autoconfiguring"}
+            >
               {status === "importing" ? "Importing..." : "Import"}
             </button>
             {status === "error" && <span className="muted">{error}</span>}
@@ -184,7 +237,11 @@ export default function MarketClient() {
           </div>
 
           <div className="actions" style={{ marginTop: 12 }}>
-            <button type="button" onClick={handleSetActive} disabled={status === "saving"}>
+            <button
+              type="button"
+              onClick={handleSetActive}
+              disabled={status === "saving" || status === "autoconfiguring"}
+            >
               {status === "saving" ? "Saving..." : "Set Active for Today"}
             </button>
             {status === "saved" && <span className="muted">Saved for {dayKey}</span>}

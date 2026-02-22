@@ -9,16 +9,22 @@ crons.interval(
   internal.weather.pollWeatherAndUpdateState,
 );
 
-crons.interval(
-  "refresh_forecast_kord",
-  { minutes: 60 },
-  internal.forecast.refreshForecastSnapshot,
+crons.cron(
+  "refresh_forecast_kord_at_11am_chicago",
+  "0 16,17 * * *",
+  internal.forecast.refreshForecastAtChicagoEleven,
 );
 
-crons.interval(
+crons.cron(
   "evaluate_auto_call_need",
-  { minutes: 5 },
+  "* * * * *",
   internal.autoCall.evaluateAndMaybeCall,
+);
+
+crons.cron(
+  "ensure_active_market_for_today",
+  "0 7,8 * * *",
+  internal.polymarket.ensureActiveMarketForToday,
 );
 
 crons.interval(

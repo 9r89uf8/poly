@@ -5,6 +5,7 @@ import { formatUtcToChicago, getChicagoDayKey } from "./lib/time";
 
 const NWS_POINTS_URL = "https://api.weather.gov/points/41.9786,-87.9048";
 const DEFAULT_NWS_USER_AGENT = "poly-forecast-auto/1.0 (ops@example.com)";
+const SCHEDULED_REFRESH_DEDUP_MS = 10 * 60 * 1000;
 
 function toErrorMessage(error) {
   if (error instanceof Error) {
@@ -60,6 +61,28 @@ function normalizeHourlyPeriods(periods) {
   }
 
   return normalized;
+}
+
+function getChicagoClockParts(input = Date.now()) {
+  const date = input instanceof Date ? input : new Date(input);
+  const formatter = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Chicago",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+  const parts = formatter.formatToParts(date);
+  const values = parts.reduce((acc, part) => {
+    if (part.type !== "literal") {
+      acc[part.type] = part.value;
+    }
+    return acc;
+  }, {});
+
+  return {
+    hour: Number(values.hour),
+    minute: Number(values.minute),
+  };
 }
 
 function computePredictedPeak(dayPeriods) {
@@ -183,6 +206,42 @@ export const refreshForecastSnapshot = internalAction({
 
       throw new Error(`Forecast refresh failed: ${reason}`);
     }
+  },
+});
+
+export const refreshForecastAtChicagoEleven = internalAction({
+  args: {},
+  handler: async (ctx) => {
+    const now = Date.now();
+    const dayKey = getChicagoDayKey(now);
+    const clock = getChicagoClockParts(now);
+
+    if (clock.hour !== 11) {
+      return {
+        ok: true,
+        skipped: true,
+        reason: "SKIP_NOT_11AM_CHICAGO",
+        dayKey,
+      };
+    }
+
+    const latest = await ctx.runQuery(api.forecast.getLatestForecastSnapshot, {
+      dayKey,
+    });
+    const latestFetchedAt = Number(latest?.fetchedAt);
+    if (
+      Number.isFinite(latestFetchedAt) &&
+      now - latestFetchedAt < SCHEDULED_REFRESH_DEDUP_MS
+    ) {
+      return {
+        ok: true,
+        skipped: true,
+        reason: "SKIP_RECENTLY_REFRESHED",
+        dayKey,
+      };
+    }
+
+    return await ctx.runAction(internal.forecast.refreshForecastSnapshot, { dayKey });
   },
 });
 

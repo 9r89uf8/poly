@@ -2,158 +2,59 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   buildDecisionKey,
-  classifyDecisionWindow,
-  computeRisingTrend,
-  hasRecentHighObservation,
   isCallInFlight,
-  shouldCallForWindow,
-  toNearMaxFlag,
+  isInsideHottestWindow,
+  resolveHottestTwoHourWindow,
 } from "../convex/lib/autoCall.js";
-
-const SETTINGS = {
-  autoCallPrePeakLeadMinutes: 90,
-  autoCallPrePeakLagMinutes: 30,
-  autoCallPeakLeadMinutes: 15,
-  autoCallPeakLagMinutes: 45,
-  autoCallPostPeakLeadMinutes: 90,
-  autoCallPostPeakLagMinutes: 180,
-};
 
 test("buildDecisionKey groups timestamps into stable interval buckets", () => {
   const dayKey = "2026-02-20";
-  const keyA = buildDecisionKey(dayKey, 1_000_000, 5);
-  const keyB = buildDecisionKey(dayKey, 1_000_000 + 30_000, 5);
-  const keyC = buildDecisionKey(dayKey, 1_000_000 + (6 * 60 * 1000), 5);
+  const keyA = buildDecisionKey(dayKey, 1_000_000, 20);
+  const keyB = buildDecisionKey(dayKey, 1_000_000 + 30_000, 20);
+  const keyC = buildDecisionKey(dayKey, 1_000_000 + (21 * 60 * 1000), 20);
 
   assert.equal(keyA, keyB);
   assert.notEqual(keyA, keyC);
 });
 
-test("classifyDecisionWindow resolves PRE_PEAK, PEAK, POST_PEAK, OUTSIDE", () => {
-  const predictedMaxAtMs = Date.UTC(2026, 1, 20, 20, 0, 0);
+test("resolveHottestTwoHourWindow selects the hottest adjacent two-hour block", () => {
+  const periods = [
+    { startMs: Date.UTC(2026, 1, 20, 18, 0, 0), tempF: 30 },
+    { startMs: Date.UTC(2026, 1, 20, 19, 0, 0), tempF: 31 },
+    { startMs: Date.UTC(2026, 1, 20, 20, 0, 0), tempF: 32 },
+    { startMs: Date.UTC(2026, 1, 20, 21, 0, 0), tempF: 31 },
+  ];
 
-  const prePeak = classifyDecisionWindow({
-    nowMs: predictedMaxAtMs - (60 * 60 * 1000),
-    predictedMaxAtMs,
-    settings: SETTINGS,
-  });
-  const peak = classifyDecisionWindow({
-    nowMs: predictedMaxAtMs,
-    predictedMaxAtMs,
-    settings: SETTINGS,
-  });
-  const postPeak = classifyDecisionWindow({
-    nowMs: predictedMaxAtMs + (120 * 60 * 1000),
-    predictedMaxAtMs,
-    settings: SETTINGS,
-  });
-  const outside = classifyDecisionWindow({
-    nowMs: predictedMaxAtMs - (4 * 60 * 60 * 1000),
-    predictedMaxAtMs,
-    settings: SETTINGS,
-  });
-
-  assert.equal(prePeak, "PRE_PEAK");
-  assert.equal(peak, "PEAK");
-  assert.equal(postPeak, "POST_PEAK");
-  assert.equal(outside, "OUTSIDE");
+  const window = resolveHottestTwoHourWindow(periods);
+  assert.ok(window);
+  assert.equal(window.windowStartAtMs, Date.UTC(2026, 1, 20, 19, 0, 0));
+  assert.equal(window.windowEndAtMs, Date.UTC(2026, 1, 20, 21, 0, 0));
+  assert.equal(window.hottestHourTempF, 32);
 });
 
-test("computeRisingTrend requires two finite observations", () => {
-  assert.equal(computeRisingTrend([]), false);
-  assert.equal(
-    computeRisingTrend([
-      { wuLikeTempWholeF: null },
-      { wuLikeTempWholeF: 42 },
-    ]),
-    false,
-  );
+test("resolveHottestTwoHourWindow falls back around single hottest hour when no adjacent pair exists", () => {
+  const periods = [
+    { startMs: Date.UTC(2026, 1, 20, 18, 0, 0), tempF: 30 },
+    { startMs: Date.UTC(2026, 1, 20, 20, 30, 0), tempF: 36 },
+    { startMs: Date.UTC(2026, 1, 20, 23, 0, 0), tempF: 32 },
+  ];
 
-  assert.equal(
-    computeRisingTrend([
-      { wuLikeTempWholeF: 43 },
-      { wuLikeTempWholeF: 42 },
-      { wuLikeTempWholeF: 41 },
-    ]),
-    true,
-  );
-  assert.equal(
-    computeRisingTrend([
-      { wuLikeTempWholeF: 42 },
-      { wuLikeTempWholeF: 43 },
-    ]),
-    false,
-  );
+  const window = resolveHottestTwoHourWindow(periods);
+  assert.ok(window);
+  assert.equal(window.windowStartAtMs, Date.UTC(2026, 1, 20, 19, 30, 0));
+  assert.equal(window.windowEndAtMs, Date.UTC(2026, 1, 20, 21, 30, 0));
+  assert.equal(window.hottestHourAtMs, Date.UTC(2026, 1, 20, 20, 30, 0));
 });
 
-test("hasRecentHighObservation checks high marks inside lookback window", () => {
-  const nowMs = Date.UTC(2026, 1, 20, 20, 0, 0);
-  const recentHigh = new Date(nowMs - (20 * 60 * 1000)).toISOString();
-  const oldHigh = new Date(nowMs - (3 * 60 * 60 * 1000)).toISOString();
+test("isInsideHottestWindow treats the end of window as exclusive", () => {
+  const window = {
+    windowStartAtMs: Date.UTC(2026, 1, 20, 20, 0, 0),
+    windowEndAtMs: Date.UTC(2026, 1, 20, 22, 0, 0),
+  };
 
-  assert.equal(
-    hasRecentHighObservation(
-      [
-        { isNewHigh: true, obsTimeUtc: recentHigh },
-        { isNewHigh: false, obsTimeUtc: oldHigh },
-      ],
-      nowMs,
-      60,
-    ),
-    true,
-  );
-
-  assert.equal(
-    hasRecentHighObservation(
-      [
-        { isNewHigh: true, obsTimeUtc: oldHigh },
-      ],
-      nowMs,
-      60,
-    ),
-    false,
-  );
-});
-
-test("shouldCallForWindow applies per-window rules", () => {
-  assert.equal(
-    shouldCallForWindow("PRE_PEAK", {
-      nearForecastMax: true,
-      risingNow: true,
-      highChangedRecently: false,
-    }),
-    true,
-  );
-  assert.equal(
-    shouldCallForWindow("PRE_PEAK", {
-      nearForecastMax: true,
-      risingNow: false,
-      highChangedRecently: false,
-    }),
-    false,
-  );
-  assert.equal(
-    shouldCallForWindow("PEAK", {
-      nearForecastMax: false,
-      risingNow: true,
-      highChangedRecently: false,
-    }),
-    true,
-  );
-  assert.equal(
-    shouldCallForWindow("POST_PEAK", {
-      nearForecastMax: false,
-      risingNow: false,
-      highChangedRecently: true,
-    }),
-    true,
-  );
-});
-
-test("toNearMaxFlag compares current and predicted temperatures with threshold", () => {
-  assert.equal(toNearMaxFlag(42, 43, 1), true);
-  assert.equal(toNearMaxFlag(42, 44, 1), false);
-  assert.equal(toNearMaxFlag(null, 44, 1), false);
+  assert.equal(isInsideHottestWindow(Date.UTC(2026, 1, 20, 20, 0, 0), window), true);
+  assert.equal(isInsideHottestWindow(Date.UTC(2026, 1, 20, 21, 59, 59), window), true);
+  assert.equal(isInsideHottestWindow(Date.UTC(2026, 1, 20, 22, 0, 0), window), false);
 });
 
 test("isCallInFlight matches active pipeline statuses", () => {
@@ -162,4 +63,3 @@ test("isCallInFlight matches active pipeline statuses", () => {
   assert.equal(isCallInFlight("RECORDING_READY"), true);
   assert.equal(isCallInFlight("PROCESSED"), false);
 });
-

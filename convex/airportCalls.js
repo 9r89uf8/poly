@@ -282,7 +282,7 @@ export const requestManualAirportCall = action({
     });
 
     const client = twilio(accountSid, authToken);
-    const twiml = "<Response><Pause length=\"20\"/><Hangup/></Response>";
+    const twiml = "<Response><Pause length=\"35\"/><Hangup/></Response>";
     const recordingStatusCallback =
       `${convexSiteUrl}/twilio/recording?secret=${encodeURIComponent(webhookSecret)}`;
 
@@ -291,7 +291,7 @@ export const requestManualAirportCall = action({
         to: targetNumber,
         from: fromNumber,
         twiml,
-        timeout: 20,
+        timeout: 35,
         record: true,
         recordingTrack: "inbound",
         recordingStatusCallback,

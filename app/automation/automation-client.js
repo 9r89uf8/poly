@@ -7,17 +7,6 @@ import { api } from "@/convex/_generated/api";
 import { getChicagoDayKey } from "@/lib/time";
 import { resolveConvexSiteUrl } from "@/lib/convex-site";
 
-function toNumberOrUndefined(value) {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : undefined;
-}
-
-function omitUndefined(value) {
-  return Object.fromEntries(
-    Object.entries(value ?? {}).filter(([, item]) => item !== undefined),
-  );
-}
-
 function formatToggle(value) {
   return value ? "Yes" : "No";
 }
@@ -72,15 +61,6 @@ export default function AutomationClient() {
     setSimulationForm({
       autoCallEnabled: Boolean(settings.autoCallEnabled),
       autoCallShadowMode: Boolean(settings.autoCallShadowMode),
-      autoCallMaxPerDay: String(settings.autoCallMaxPerDay),
-      autoCallMinSpacingMinutes: String(settings.autoCallMinSpacingMinutes),
-      autoCallNearMaxThresholdF: String(settings.autoCallNearMaxThresholdF),
-      autoCallPrePeakLeadMinutes: String(settings.autoCallPrePeakLeadMinutes),
-      autoCallPrePeakLagMinutes: String(settings.autoCallPrePeakLagMinutes),
-      autoCallPeakLeadMinutes: String(settings.autoCallPeakLeadMinutes),
-      autoCallPeakLagMinutes: String(settings.autoCallPeakLagMinutes),
-      autoCallPostPeakLeadMinutes: String(settings.autoCallPostPeakLeadMinutes),
-      autoCallPostPeakLagMinutes: String(settings.autoCallPostPeakLagMinutes),
     });
   }, [settings]);
 
@@ -90,33 +70,6 @@ export default function AutomationClient() {
     }
 
     return {
-      ...omitUndefined({
-        autoCallMaxPerDay: toNumberOrUndefined(simulationForm.autoCallMaxPerDay),
-        autoCallMinSpacingMinutes: toNumberOrUndefined(
-          simulationForm.autoCallMinSpacingMinutes,
-        ),
-        autoCallNearMaxThresholdF: toNumberOrUndefined(
-          simulationForm.autoCallNearMaxThresholdF,
-        ),
-        autoCallPrePeakLeadMinutes: toNumberOrUndefined(
-          simulationForm.autoCallPrePeakLeadMinutes,
-        ),
-        autoCallPrePeakLagMinutes: toNumberOrUndefined(
-          simulationForm.autoCallPrePeakLagMinutes,
-        ),
-        autoCallPeakLeadMinutes: toNumberOrUndefined(
-          simulationForm.autoCallPeakLeadMinutes,
-        ),
-        autoCallPeakLagMinutes: toNumberOrUndefined(
-          simulationForm.autoCallPeakLagMinutes,
-        ),
-        autoCallPostPeakLeadMinutes: toNumberOrUndefined(
-          simulationForm.autoCallPostPeakLeadMinutes,
-        ),
-        autoCallPostPeakLagMinutes: toNumberOrUndefined(
-          simulationForm.autoCallPostPeakLagMinutes,
-        ),
-      }),
       autoCallEnabled: Boolean(simulationForm.autoCallEnabled),
       autoCallShadowMode: Boolean(simulationForm.autoCallShadowMode),
     };
@@ -182,11 +135,6 @@ export default function AutomationClient() {
   const dayExportUrl = convexSiteUrl
     ? `${convexSiteUrl}/exports/day.csv?dayKey=${encodeURIComponent(dayKey)}`
     : null;
-
-  const onSimulationChange = (field) => (event) => {
-    const value = event.target.value;
-    setSimulationForm((prev) => ({ ...prev, [field]: value }));
-  };
 
   const onSimulationToggle = (field) => (event) => {
     const value = Boolean(event.target.checked);
@@ -314,93 +262,10 @@ export default function AutomationClient() {
                 />
               </div>
             </div>
-
-            <div className="grid grid-2">
-              <div className="form-row">
-                <label htmlFor="sim-max-per-day">Max calls/day</label>
-                <input
-                  id="sim-max-per-day"
-                  value={simulationForm.autoCallMaxPerDay}
-                  onChange={onSimulationChange("autoCallMaxPerDay")}
-                  inputMode="numeric"
-                />
-              </div>
-              <div className="form-row">
-                <label htmlFor="sim-spacing">Min spacing minutes</label>
-                <input
-                  id="sim-spacing"
-                  value={simulationForm.autoCallMinSpacingMinutes}
-                  onChange={onSimulationChange("autoCallMinSpacingMinutes")}
-                  inputMode="numeric"
-                />
-              </div>
-              <div className="form-row">
-                <label htmlFor="sim-near-max">Near-max threshold F</label>
-                <input
-                  id="sim-near-max"
-                  value={simulationForm.autoCallNearMaxThresholdF}
-                  onChange={onSimulationChange("autoCallNearMaxThresholdF")}
-                  inputMode="decimal"
-                />
-              </div>
-            </div>
-
-            <div className="grid grid-2">
-              <div className="form-row">
-                <label htmlFor="sim-pre-lead">Pre-peak lead</label>
-                <input
-                  id="sim-pre-lead"
-                  value={simulationForm.autoCallPrePeakLeadMinutes}
-                  onChange={onSimulationChange("autoCallPrePeakLeadMinutes")}
-                  inputMode="numeric"
-                />
-              </div>
-              <div className="form-row">
-                <label htmlFor="sim-pre-lag">Pre-peak lag</label>
-                <input
-                  id="sim-pre-lag"
-                  value={simulationForm.autoCallPrePeakLagMinutes}
-                  onChange={onSimulationChange("autoCallPrePeakLagMinutes")}
-                  inputMode="numeric"
-                />
-              </div>
-              <div className="form-row">
-                <label htmlFor="sim-peak-lead">Peak lead</label>
-                <input
-                  id="sim-peak-lead"
-                  value={simulationForm.autoCallPeakLeadMinutes}
-                  onChange={onSimulationChange("autoCallPeakLeadMinutes")}
-                  inputMode="numeric"
-                />
-              </div>
-              <div className="form-row">
-                <label htmlFor="sim-peak-lag">Peak lag</label>
-                <input
-                  id="sim-peak-lag"
-                  value={simulationForm.autoCallPeakLagMinutes}
-                  onChange={onSimulationChange("autoCallPeakLagMinutes")}
-                  inputMode="numeric"
-                />
-              </div>
-              <div className="form-row">
-                <label htmlFor="sim-post-lead">Post-peak lead</label>
-                <input
-                  id="sim-post-lead"
-                  value={simulationForm.autoCallPostPeakLeadMinutes}
-                  onChange={onSimulationChange("autoCallPostPeakLeadMinutes")}
-                  inputMode="numeric"
-                />
-              </div>
-              <div className="form-row">
-                <label htmlFor="sim-post-lag">Post-peak lag</label>
-                <input
-                  id="sim-post-lag"
-                  value={simulationForm.autoCallPostPeakLagMinutes}
-                  onChange={onSimulationChange("autoCallPostPeakLagMinutes")}
-                  inputMode="numeric"
-                />
-              </div>
-            </div>
+            <p className="muted" style={{ margin: 0 }}>
+              Auto logic is fixed: evaluate each minute, call at 20-minute cadence,
+              only inside the hottest forecast 2-hour window.
+            </p>
           </div>
         )}
 
@@ -424,18 +289,16 @@ export default function AutomationClient() {
             </div>
             <div className="grid grid-2">
               <p className="muted" style={{ margin: 0 }}>
-                Signal rising: {formatToggle(Boolean(simulation.signals?.risingNow))}
+                Forecast window found: {formatToggle(Boolean(simulation.signals?.hasForecastWindow))}
               </p>
               <p className="muted" style={{ margin: 0 }}>
-                Signal near-max: {formatToggle(Boolean(simulation.signals?.nearForecastMax))}
+                In hottest 2-hour window: {formatToggle(Boolean(simulation.signals?.inPeakTwoHourWindow))}
               </p>
               <p className="muted" style={{ margin: 0 }}>
-                Signal recent-high: {formatToggle(Boolean(simulation.signals?.highChangedRecently))}
+                Window start: {simulation.context?.callWindowStartLocal ?? "N/A"}
               </p>
               <p className="muted" style={{ margin: 0 }}>
-                Forecast max temp: {Number.isFinite(Number(simulation.context?.predictedMaxTempF))
-                  ? `${Number(simulation.context.predictedMaxTempF).toFixed(1)}°F`
-                  : "N/A"}
+                Window end: {simulation.context?.callWindowEndLocal ?? "N/A"}
               </p>
             </div>
           </div>
